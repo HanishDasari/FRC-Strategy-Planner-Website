@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FRC Strategy Platform - Dashboard</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+
+<body>
+    <div class="container">
+        <header
+            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; padding: 1rem 0;">
+            <h2>Dashboard</h2>
+            <div>
+                <span id="user-info" style="margin-right: 1rem; color: var(--text-secondary);"></span>
+                <button id="logout-btn" class="btn btn-secondary">Logout</button>
+            </div>
+        </header>
+
+        <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 2rem;">
+
+            <!-- Matches Section -->
+            <div>
+                <div class="card" style="margin-bottom: 2rem;">
+                    <h3>Create Match</h3>
+                    <form id="create-match-form" style="display: flex; gap: 1rem; align-items: flex-end;">
+                        <div style="flex-grow: 1;">
+                            <label>Match Number</label>
+                            <input type="number" name="match_number" required style="margin-bottom: 0;">
+                        </div>
+                        <div style="flex-grow: 1;">
+                            <label>Type</label>
+                            <select name="match_type" style="margin-bottom: 0;">
+                                <option value="Qualification">Qualification</option>
+                                <option value="Elimination">Elimination</option>
+                                <option value="Practice">Practice</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn">Create</button>
+                    </form>
+                </div>
+
+                <div class="card">
+                    <h3>Your Matches</h3>
+                    <div id="matches-list">
+                        <!-- Populated by JS -->
+                        <p style="color: var(--text-secondary);">Loading matches...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sidebar -->
+            <div>
+                <div class="card">
+                    <h3>Pending Invites</h3>
+                    <div id="invites-list">
+                        <!-- Populated by JS -->
+                        <p style="color: var(--text-secondary);">No pending invites.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/main.js"></script>
+    <script>
+        // Init dashboard specific logic
+        document.addEventListener('DOMContentLoaded', () => {
+            if (window.location.pathname === '/dashboard') {
+                initDashboard();
+            }
+        });
+    </script>
+</body>
+
+</html>

@@ -1,8 +1,14 @@
 import os
 import functools
 from flask import Flask, render_template, request, redirect, url_for, flash, session, g, jsonify
-from werkzeug.security import check_password_hash, generate_password_hash
+from authlib.integrations.flask_client import OAuth
+from flask_socketio import SocketIO, emit, join_room, leave_room
+from werkzeug.security import generate_password_hash, check_password_hash
 import db
+import uuid
+from datetime import datetime, timedelta
+
+socketio = SocketIO()
 
 def create_app(test_config=None):
     # create and configure the app
@@ -10,6 +16,8 @@ def create_app(test_config=None):
     app.config.from_mapping(
         SECRET_KEY='dev',
         DATABASE=os.path.join(app.root_path, 'frc_strategy.sqlite'),
+        GOOGLE_CLIENT_ID=os.environ.get('GOOGLE_CLIENT_ID'),
+        GOOGLE_CLIENT_SECRET=os.environ.get('GOOGLE_CLIENT_SECRET'),
     )
 
     if test_config is None:
@@ -19,6 +27,18 @@ def create_app(test_config=None):
         # load the test config if passed in
         app.config.from_mapping(test_config)
 
+    if not app.config['GOOGLE_CLIENT_ID'] or not app.config['GOOGLE_CLIENT_SECRET']:
+        print("WARNING: GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET not set. Google Login will fail.")
+
+    oauth = OAuth(app)
+    oauth.register(
+        name='google',
+        server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+        client_kwargs={
+            'scope': 'openid email profile'
+        }
+    )
+
     # ensure the instance folder exists
     try:
         os.makedirs(app.instance_path)
@@ -26,13 +46,29 @@ def create_app(test_config=None):
         pass
 
     db.init_app(app)
+    socketio.init_app(app, cors_allowed_origins="*")
+
+    import traceback
+    @app.errorhandler(500)
+    def handle_500(e):
+        print("\n--- SERVER ERROR 500 ---")
+        traceback.print_exc()
+        print("------------------------\n")
+        return jsonify(error="Internal Server Error"), 500
+
+    def get_db_for_socket():
+        # Socket handlers don't have 'g', so we create a temporary connection
+        import sqlite3
+        conn = sqlite3.connect(app.config['DATABASE'])
+        conn.row_factory = sqlite3.Row
+        return conn
 
     # Helper decorator for login required routes
     def login_required(view):
         @functools.wraps(view)
         def wrapped_view(**kwargs):
             if g.user is None:
-                return redirect(url_for('login'))
+                return redirect(url_for('index'))
             return view(**kwargs)
         return wrapped_view
 
@@ -44,7 +80,7 @@ def create_app(test_config=None):
             g.user = None
         else:
             g.user = db.get_db().execute(
-                'SELECT u.id, u.username, u.team_id, t.team_number, t.team_name '
+                'SELECT u.id, u.email, u.name, u.team_id, t.team_number, t.team_name '
                 'FROM users u JOIN teams t ON u.team_id = t.id '
                 'WHERE u.id = ?', (user_id,)
             ).fetchone()
@@ -63,22 +99,196 @@ def create_app(test_config=None):
         return render_template('dashboard.html')
 
     # Auth API
+    # Auth API
+    # Auth API
+    @app.route('/login/google')
+    def login_google():
+        if not app.config['GOOGLE_CLIENT_ID'] or not app.config['GOOGLE_CLIENT_SECRET']:
+            flash("Configuration Error: Google Credentials missing on server.")
+            return redirect(url_for('index'))
+            
+        redirect_uri = url_for('auth_callback', _external=True)
+        return oauth.google.authorize_redirect(redirect_uri)
+
+    @app.route('/register')
+    def register_page():
+        return render_template('register.html')
+
     @app.route('/auth/register', methods=('POST',))
-    def register():
-        data = request.get_json()
-        username = data.get('username')
-        password = data.get('password')
-        team_number = data.get('team_number')
-        team_name = data.get('team_name')
-        
-        if not username or not password or not team_number:
-            return jsonify({'error': 'Missing required fields'}), 400
+    def auth_register():
+        name = request.form.get('name')
+        email = request.form.get('email')
+        password = request.form.get('password')
+        team_number = request.form.get('team_number')
+        team_name = request.form.get('team_name')
+
+        if not all([name, email, password, team_number, team_name]):
+            flash("All fields are required.")
+            return redirect(url_for('register_page'))
 
         database = db.get_db()
-        error = None
+        user = database.execute('SELECT id FROM users WHERE email = ?', (email,)).fetchone()
         
+        if user:
+            flash("Email already registered. Please login.")
+            return redirect(url_for('index'))
+
+        # Team logic
+        team = database.execute('SELECT id FROM teams WHERE team_number = ?', (team_number,)).fetchone()
+        if not team:
+            cursor = database.execute(
+                'INSERT INTO teams (team_number, team_name) VALUES (?, ?)',
+                (team_number, team_name)
+            )
+            team_id = cursor.lastrowid
+        else:
+            team_id = team['id']
+
+        database.execute(
+            'INSERT INTO users (email, name, password_hash, team_id) VALUES (?, ?, ?, ?)',
+            (email, name, generate_password_hash(password), team_id)
+        )
+        database.commit()
+
+        flash("Registration successful. Please login.")
+        return redirect(url_for('index'))
+
+    @app.route('/auth/login', methods=('POST',))
+    def auth_login():
+        email = request.form.get('email')
+        password = request.form.get('password')
+
+        database = db.get_db()
+        user = database.execute(
+            'SELECT * FROM users WHERE email = ?', (email,)
+        ).fetchone()
+
+        if user and user['password_hash'] and check_password_hash(user['password_hash'], password):
+            session.clear()
+            session['user_id'] = user['id']
+            return redirect(url_for('dashboard'))
+        
+        flash("Invalid email or password.")
+        return redirect(url_for('index'))
+
+    @app.route('/forgot-password')
+    def forgot_password_page():
+        return render_template('forgot_password.html')
+
+    @app.route('/auth/forgot-password', methods=('POST',))
+    def auth_forgot_password():
+        email = request.form.get('email')
+        database = db.get_db()
+        user = database.execute('SELECT id FROM users WHERE email = ?', (email,)).fetchone()
+
+        if user:
+            token = str(uuid.uuid4())
+            expires_at = datetime.now() + timedelta(hours=1)
+            database.execute(
+                'INSERT INTO password_resets (user_id, token, expires_at) VALUES (?, ?, ?)',
+                (user['id'], token, expires_at)
+            )
+            database.commit()
+            
+            reset_link = url_for('reset_password_page', token=token, _external=True)
+            print(f"\n--- PASSWORD RESET DEBUG ---\nUser: {email}\nLink: {reset_link}\n----------------------------\n")
+            flash("If that email is registered, a reset link has been sent (check server console).")
+        else:
+            flash("If that email is registered, a reset link has been sent.")
+            
+        return redirect(url_for('index'))
+
+    @app.route('/reset-password/<token>')
+    def reset_password_page(token):
+        return render_template('reset_password.html', token=token)
+
+    @app.route('/auth/reset-password', methods=('POST',))
+    def auth_reset_password():
+        token = request.form.get('token')
+        password = request.form.get('password')
+
+        database = db.get_db()
+        reset = database.execute(
+            'SELECT * FROM password_resets WHERE token = ? AND expires_at > ?',
+            (token, datetime.now())
+        ).fetchone()
+
+        if reset:
+            database.execute(
+                'UPDATE users SET password_hash = ? WHERE id = ?',
+                (generate_password_hash(password), reset['user_id'])
+            )
+            database.execute('DELETE FROM password_resets WHERE id = ?', (reset['id'],))
+            database.commit()
+            flash("Password reset successful. Please login.")
+            return redirect(url_for('index'))
+        
+        flash("Invalid or expired reset token.")
+        return redirect(url_for('index'))
+
+    @app.route('/auth/callback')
+    def auth_callback():
         try:
-            # Check if team exists, if not create it
+            token = oauth.google.authorize_access_token()
+        except Exception as e:
+            flash(f"Authentication failed: {str(e)}")
+            return redirect(url_for('index'))
+            
+        user_info = token.get('userinfo')
+        if not user_info:
+             user_info = oauth.google.userinfo()
+             
+        # Check if user exists by google_id
+        database = db.get_db()
+        user = database.execute(
+            'SELECT * FROM users WHERE google_id = ?', (user_info['sub'],)
+        ).fetchone()
+
+        if not user:
+            # Check by email for potential account linking
+            user = database.execute(
+                'SELECT * FROM users WHERE email = ?', (user_info['email'],)
+            ).fetchone()
+            
+            if user:
+                # Link account!
+                database.execute(
+                    'UPDATE users SET google_id = ? WHERE id = ?',
+                    (user_info['sub'], user['id'])
+                )
+                database.commit()
+
+        if user:
+            session.clear()
+            session['user_id'] = user['id']
+            return redirect(url_for('dashboard'))
+        else:
+            # New user - temporary store info and redirect to finish registration
+            session['google_user_info'] = user_info
+            return redirect(url_for('register_finish_page'))
+
+    @app.route('/register/google')
+    def register_finish_page():
+        user_info = session.get('google_user_info')
+        if not user_info:
+            return redirect(url_for('index'))
+            
+        return render_template('register_finish.html', 
+                             email=user_info['email'], 
+                             name=user_info.get('name'))
+
+    @app.route('/auth/register-finish', methods=('POST',))
+    def register_finish():
+        user_info = session.get('google_user_info')
+        if not user_info:
+            return redirect(url_for('index'))
+            
+        team_number = request.form['team_number']
+        team_name = request.form['team_name']
+        
+        database = db.get_db()
+        try:
+            # Check/Create Team
             team = database.execute('SELECT id FROM teams WHERE team_number = ?', (team_number,)).fetchone()
             if team is None:
                 cursor = database.execute(
@@ -90,56 +300,37 @@ def create_app(test_config=None):
                 team_id = team['id']
 
             # Create User
-            database.execute(
-                'INSERT INTO users (username, password_hash, team_id) VALUES (?, ?, ?)',
-                (username, generate_password_hash(password), team_id)
+            cursor = database.execute(
+                'INSERT INTO users (google_id, email, name, team_id) VALUES (?, ?, ?, ?)',
+                (user_info['sub'], user_info['email'], user_info.get('name'), team_id)
             )
+            user_id = cursor.lastrowid
             database.commit()
-        except database.IntegrityError:
-            error = f"User {username} is already registered."
-        except Exception as e:
-            error = str(e)
-
-        if error is None:
-            return jsonify({'message': 'Registration successful'}), 201
-        
-        return jsonify({'error': error}), 400
-
-    @app.route('/auth/login', methods=('POST',))
-    def login():
-        data = request.get_json()
-        username = data.get('username')
-        password = data.get('password')
-
-        database = db.get_db()
-        error = None
-        user = database.execute(
-            'SELECT * FROM users WHERE username = ?', (username,)
-        ).fetchone()
-
-        if user is None:
-            error = 'Incorrect username.'
-        elif not check_password_hash(user['password_hash'], password):
-            error = 'Incorrect password.'
-
-        if error is None:
+            
+            # Login
             session.clear()
-            session['user_id'] = user['id']
-            return jsonify({'message': 'Login successful'}), 200
+            session['user_id'] = user_id
+            return redirect(url_for('dashboard'))
 
-        return jsonify({'error': error}), 401
+        except database.IntegrityError:
+            flash("User already registered or invalid data.")
+            return redirect(url_for('index'))
+        except Exception as e:
+            flash(f"Registration error: {str(e)}")
+            return redirect(url_for('index'))
 
-    @app.route('/auth/logout', methods=('POST',))
+    @app.route('/auth/logout') 
     def logout():
         session.clear()
-        return jsonify({'message': 'Logged out'}), 200
+        return redirect(url_for('index'))
 
     @app.route('/auth/me')
     def me():
         if g.user:
             return jsonify({
                 'id': g.user['id'],
-                'username': g.user['username'],
+                'email': g.user['email'],
+                'name': g.user['name'],
                 'team_id': g.user['team_id'],
                 'team_number': g.user['team_number'],
                 'team_name': g.user['team_name']
@@ -167,9 +358,9 @@ def create_app(test_config=None):
             match_id = cursor.lastrowid
             
             # Automatically add creator to match_alliances (defaulting to Red for now, or let them choose)
-            # For simplicity, we won't assign color yet or default to Red
+            # Creator is always Red for now
             database.execute(
-                'INSERT INTO match_alliances (match_id, team_id, alliance_color) VALUES (?, ?, ?)',
+                'INSERT INTO match_alliances (match_id, team_id, alliance_color, last_seen) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
                 (match_id, g.user['team_id'], 'Red') 
             )
             
@@ -179,7 +370,10 @@ def create_app(test_config=None):
                      'INSERT INTO strategies (match_id, phase) VALUES (?, ?)',
                      (match_id, phase)
                 )
-            database.execute('INSERT INTO drawings (match_id, phase) VALUES (?, ?)', (match_id, 'Field'))
+                database.execute(
+                     'INSERT INTO drawings (match_id, phase) VALUES (?, ?)',
+                     (match_id, phase)
+                )
 
             database.commit()
             return jsonify({'message': 'Match created', 'id': match_id}), 201
@@ -197,6 +391,37 @@ def create_app(test_config=None):
         ).fetchall()
         
         return jsonify([dict(row) for row in matches])
+
+    @app.route('/api/matches/<int:match_id>', methods=('DELETE',))
+    @login_required
+    def delete_match(match_id):
+        database = db.get_db()
+        
+        # Check if the user's team is the creator or part of the match
+        match = database.execute(
+            'SELECT creator_team_id FROM matches WHERE id = ?', (match_id,)
+        ).fetchone()
+        
+        if not match:
+            return jsonify({'error': 'Match not found'}), 404
+            
+        if match['creator_team_id'] != g.user['team_id']:
+            return jsonify({'error': 'Only the creator team can delete this match'}), 403
+
+        try:
+            # Cascading deletion
+            database.execute('DELETE FROM messages WHERE match_id = ?', (match_id,))
+            database.execute('DELETE FROM strategies WHERE match_id = ?', (match_id,))
+            database.execute('DELETE FROM drawings WHERE match_id = ?', (match_id,))
+            database.execute('DELETE FROM invites WHERE match_id = ?', (match_id,))
+            database.execute('DELETE FROM match_alliances WHERE match_id = ?', (match_id,))
+            database.execute('DELETE FROM matches WHERE id = ?', (match_id,))
+            
+            database.commit()
+            return jsonify({'message': 'Match deleted successfully'}), 200
+        except Exception as e:
+            database.rollback()
+            return jsonify({'error': f'Failed to delete match: {str(e)}'}), 500
 
     @app.route('/api/invites', methods=('POST',))
     @login_required
@@ -263,7 +488,7 @@ def create_app(test_config=None):
         if status == 'Accepted':
             # Add to match alliances
             database.execute(
-                'INSERT INTO match_alliances (match_id, team_id, alliance_color) VALUES (?, ?, ?)',
+                'INSERT INTO match_alliances (match_id, team_id, alliance_color, last_seen) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
                 (invite['match_id'], g.user['team_id'], 'Blue') # Defaulting to Blue? or Unknown.
             )
         
@@ -273,7 +498,11 @@ def create_app(test_config=None):
     @app.route('/match/<int:match_id>')
     @login_required
     def match_room(match_id):
-        return render_template('match.html', match_id=match_id)
+        # Pass current user info to template for JS
+        return render_template('match.html', 
+                             match_id=match_id, 
+                             current_team_number=g.user['team_number'],
+                             current_user_id=g.user['id'])
 
     # --- Collaboration API (Polling) ---
 
@@ -282,14 +511,27 @@ def create_app(test_config=None):
     def get_match_data(match_id):
         database = db.get_db()
         
-        # Check access
+        # Check access and update Last Seen
+        print(f"DEBUG: Getting match data for {match_id}")
+        if not g.user:
+            return jsonify({'error': 'Not logged in'}), 401
+            
         access = database.execute(
             'SELECT id FROM match_alliances WHERE match_id = ? AND team_id = ?',
             (match_id, g.user['team_id'])
         ).fetchone()
         
+        print(f"DEBUG: Access found? {access is not None}")
         if not access:
+            print(f"DEBUG: Unauthorized match access for match {match_id}")
             return jsonify({'error': 'Unauthorized'}), 403
+
+        # Update last_seen
+        database.execute(
+            'UPDATE match_alliances SET last_seen = CURRENT_TIMESTAMP WHERE id = ?',
+            (access['id'],)
+        )
+        database.commit()
 
         # Messages
         messages = database.execute(
@@ -308,16 +550,52 @@ def create_app(test_config=None):
             (match_id,)
         ).fetchall()
         
-        # Drawing
-        drawing = database.execute(
-            'SELECT drawing_data_json FROM drawings WHERE match_id = ?',
+        # Drawings - Return all phases
+        drawings = database.execute(
+            'SELECT phase, drawing_data_json FROM drawings WHERE match_id = ?',
             (match_id,)
-        ).fetchone()
+        ).fetchall()
+        
+        # Teams in this match with Active Status
+        # Active if seen in last 30 seconds
+        teams = database.execute(
+            '''
+            SELECT t.team_number, t.team_name, ma.alliance_color, ma.last_seen,
+                   (CASE WHEN ma.last_seen IS NOT NULL 
+                         THEN (CAST(strftime('%s', 'now') AS INTEGER) - CAST(strftime('%s', ma.last_seen) AS INTEGER)) < 30 
+                         ELSE 0 END) as is_active
+            FROM match_alliances ma
+            JOIN teams t ON ma.team_id = t.id
+            WHERE ma.match_id = ?
+            ''', (match_id,)
+        ).fetchall()
+
+        # Invites
+        invites = database.execute(
+            '''
+            SELECT i.*, t.team_number as from_team_number, t2.team_number as to_team_number
+            FROM invites i
+            JOIN teams t ON i.from_team_id = t.id
+            JOIN teams t2 ON i.to_team_id = t2.id
+            WHERE i.match_id = ?
+            ''', (match_id,)
+        ).fetchall()
+        
+        # Format messages with string timestamps
+        messages_list = []
+        for m in messages:
+            msg_dict = dict(m)
+            if msg_dict.get('timestamp'):
+                msg_dict['timestamp'] = str(msg_dict['timestamp'])
+            messages_list.append(msg_dict)
 
         return jsonify({
-            'messages': [dict(row) for row in messages],
-            'strategies': {row['phase']: row['text_content'] for row in strategies},
-            'drawing': drawing['drawing_data_json'] if drawing else '{}'
+            'match_id': match_id,
+            'messages': messages_list,
+            'strategies': {s['phase']: s['text_content'] for s in strategies},
+            'drawings': {d['phase']: d['drawing_data_json'] for d in drawings},
+            'teams': [dict(a) for a in teams],
+            'invites': [dict(i) for i in invites]
         })
 
     @app.route('/api/matches/<int:match_id>/messages', methods=('POST',))
@@ -362,14 +640,68 @@ def create_app(test_config=None):
     def update_drawing(match_id):
         data = request.get_json()
         drawing_data = data.get('drawing_data') # Expecting JSON string
+        phase = data.get('phase', 'Autonomous') # Default if missing
         
+        if phase not in ['Autonomous', 'Teleop', 'Endgame']:
+            return jsonify({'error': 'Invalid phase'}), 400
+
         database = db.get_db()
         database.execute(
-            'UPDATE drawings SET drawing_data_json = ?, last_updated = CURRENT_TIMESTAMP WHERE match_id = ?',
-            (drawing_data, match_id)
+            'UPDATE drawings SET drawing_data_json = ?, last_updated = CURRENT_TIMESTAMP WHERE match_id = ? AND phase = ?',
+            (drawing_data, match_id, phase)
         )
         database.commit()
         return jsonify({'message': 'Drawing saved'}), 200
+
+    # --- Socket.IO Events ---
+
+    @socketio.on('join')
+    def on_join(data):
+        room = str(data['match_id'])
+        join_room(room)
+        print(f"User joined room: {room}")
+
+    @socketio.on('chat_message')
+    def handle_chat(data):
+        room = str(data['match_id'])
+        database = get_db_for_socket()
+        try:
+            database.execute(
+                'INSERT INTO messages (match_id, sender_team_id, content) VALUES (?, ?, ?)',
+                (data['match_id'], data['team_id'], data['content'])
+            )
+            database.commit()
+            emit('message', data, room=room)
+        finally:
+            database.close()
+
+    @socketio.on('update_drawing')
+    def handle_drawing(data):
+        room = str(data['match_id'])
+        database = get_db_for_socket()
+        try:
+            database.execute(
+                'UPDATE drawings SET drawing_data_json = ?, last_updated = CURRENT_TIMESTAMP WHERE match_id = ? AND phase = ?',
+                (data['drawing_data'], data['match_id'], data['phase'])
+            )
+            database.commit()
+            emit('drawing_update', data, room=room, include_self=False)
+        finally:
+            database.close()
+
+    @socketio.on('update_strategy')
+    def handle_strategy(data):
+        room = str(data['match_id'])
+        database = get_db_for_socket()
+        try:
+            database.execute(
+                'UPDATE strategies SET text_content = ? WHERE match_id = ? AND phase = ?',
+                (data['text_content'], data['match_id'], data['phase'])
+            )
+            database.commit()
+            emit('strategy_update', data, room=room, include_self=False)
+        finally:
+            database.close()
 
     return app
 
@@ -377,4 +709,4 @@ def create_app(test_config=None):
 
 if __name__ == '__main__':
     app = create_app()
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    socketio.run(app, host='127.0.0.1', port=5000, debug=True)

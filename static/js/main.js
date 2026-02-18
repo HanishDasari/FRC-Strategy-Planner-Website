@@ -1,5 +1,6 @@
-document.addEventListener('DOMContentLoaded', () => {
+// --- Dashboard Logic ---
 
+document.addEventListener('DOMContentLoaded', () => {
     // Auth Tabs
     const tabs = document.querySelectorAll('.tab');
     if (tabs.length > 0) {
@@ -11,83 +12,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 // Toggle forms
                 const target = tab.dataset.target;
-                document.querySelector('#login-form').classList.toggle('hidden', target !== 'login');
-                document.querySelector('#register-form').classList.toggle('hidden', target !== 'register');
-                document.querySelector('#auth-error').style.display = 'none';
+                const loginSection = document.getElementById('login-section');
+                const registerSection = document.getElementById('register-section');
+
+                if (target === 'login') {
+                    loginSection.style.display = 'block';
+                    registerSection.style.display = 'none';
+                } else {
+                    loginSection.style.display = 'none';
+                    registerSection.style.display = 'block';
+                }
             });
         });
     }
-
-    // Login Handler
-    const loginForm = document.querySelector('#login-form');
-    if (loginForm) {
-        loginForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const formData = new FormData(loginForm);
-            const data = Object.fromEntries(formData.entries());
-
-            try {
-                const res = await fetch('/auth/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
-                });
-
-                const result = await res.json();
-
-                if (res.ok) {
-                    window.location.href = '/dashboard';
-                } else {
-                    showError(result.error);
-                }
-            } catch (err) {
-                showError('Login failed. Please try again.');
-            }
-        });
-    }
-
-    // Register Handler
-    const registerForm = document.querySelector('#register-form');
-    if (registerForm) {
-        registerForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const formData = new FormData(registerForm);
-            const data = Object.fromEntries(formData.entries());
-
-            try {
-                const res = await fetch('/auth/register', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
-                });
-
-                const result = await res.json();
-
-                if (res.ok) {
-                    // Auto login or ask to login? Let's just alert for now or switch tabs.
-                    alert('Registration successful! Please login.');
-                    document.querySelector('.tab[data-target="login"]').click();
-                } else {
-                    showError(result.error);
-                }
-            } catch (err) {
-                showError('Registration failed.');
-            }
-        });
-    }
 });
-
-function showError(msg) {
-    const el = document.querySelector('#auth-error');
-    if (el) {
-        el.textContent = msg;
-        el.style.display = 'block';
-    } else {
-        alert(msg);
-    }
-}
-
-// --- Dashboard Logic ---
 
 async function initDashboard() {
     loadUserInfo();
@@ -95,41 +33,53 @@ async function initDashboard() {
     loadInvites();
 
     // Logout
-    document.getElementById('logout-btn').addEventListener('click', async () => {
-        await fetch('/auth/logout', { method: 'POST' });
-        window.location.href = '/';
-    });
+    const logoutBtn = document.getElementById('logout-btn');
+    if (logoutBtn) {
+        logoutBtn.addEventListener('click', () => {
+            window.location.href = '/auth/logout';
+        });
+    }
 
     // Create Match
     const createForm = document.getElementById('create-match-form');
-    createForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const formData = new FormData(createForm);
-        const data = Object.fromEntries(formData.entries());
+    if (createForm) {
+        createForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(createForm);
+            const data = Object.fromEntries(formData.entries());
 
-        try {
-            const res = await fetch('/api/matches', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data)
-            });
-            if (res.ok) {
-                createForm.reset();
-                loadMatches();
-            } else {
-                alert('Failed to create match');
+            try {
+                const res = await fetch('/api/matches', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                if (res.ok) {
+                    createForm.reset();
+                    loadMatches();
+                } else {
+                    alert('Failed to create match');
+                }
+            } catch (err) {
+                console.error(err);
             }
-        } catch (err) {
-            console.error(err);
-        }
-    });
+        });
+    }
 }
 
 async function loadUserInfo() {
-    const res = await fetch('/auth/me');
-    const data = await res.json();
-    if (data.username) {
-        document.getElementById('user-info').textContent = `${data.username} | Team ${data.team_number}`;
+    try {
+        const res = await fetch('/auth/me');
+        if (res.ok) {
+            const data = await res.json();
+            const displayName = data.name || data.email;
+            const userInfo = document.getElementById('user-info');
+            if (userInfo) {
+                userInfo.textContent = `${displayName} | Team ${data.team_number}`;
+            }
+        }
+    } catch (e) {
+        console.error("Failed to load user info", e);
     }
 }
 
@@ -161,7 +111,10 @@ async function loadMatches() {
                         Created by Team ${m.creator_team_number}
                     </span>
                 </div>
-                <a href="/match/${m.id}" class="btn">Open</a>
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                    <a href="/match/${m.id}" class="btn">Open</a>
+                    <button onclick="deleteMatch(${m.id})" class="btn btn-secondary" style="background-color: var(--red-alliance); border: none; padding: 0.5rem 0.8rem;">Delete</button>
+                </div>
             `;
             list.appendChild(div);
         });
@@ -217,3 +170,24 @@ async function respondInvite(id, status) {
     }
 }
 
+async function deleteMatch(id) {
+    if (!confirm('Are you sure you want to delete this match? This will permanently remove all strategy notes, drawings, and chat messages.')) {
+        return;
+    }
+
+    try {
+        const res = await fetch(`/api/matches/${id}`, {
+            method: 'DELETE'
+        });
+
+        if (res.ok) {
+            loadMatches();
+        } else {
+            const data = await res.json();
+            alert(data.error || 'Failed to delete match');
+        }
+    } catch (err) {
+        console.error(err);
+        alert('An error occurred while deleting the match');
+    }
+}

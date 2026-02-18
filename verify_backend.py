@@ -1,88 +1,104 @@
-import requests
 
-BASE_URL = 'http://127.0.0.1:5000'
-SESSION = requests.Session()
+import unittest
+import os
+import json
+from app import create_app
+import db
 
-def test_auth():
-    print("Testing Auth...")
-    # Register
-    res = SESSION.post(f'{BASE_URL}/auth/register', json={
-        'username': 'testuser',
-        'password': 'password',
-        'team_number': 254,
-        'team_name': 'Cheesy Poofs'
-    })
-    if res.status_code == 201:
-        print("Registration successful")
-    elif res.status_code == 400 and 'already registered' in res.text:
-         print("User already registered (expected on re-run)")
-    else:
-        print(f"Registration failed: {res.text}")
-        return False
+class FRCFlaskTestCase(unittest.TestCase):
+    def setUp(self):
+        self.app = create_app({
+            'TESTING': True,
+            'DATABASE': ':memory:', # Use in-memory DB for testing
+            'GOOGLE_CLIENT_ID': 'test',
+            'GOOGLE_CLIENT_SECRET': 'test'
+        })
+        self.client = self.app.test_client()
+        self.runner = self.app.test_cli_runner()
 
-    # Login
-    res = SESSION.post(f'{BASE_URL}/auth/login', json={
-        'username': 'testuser',
-        'password': 'password'
-    })
-    if res.status_code == 200:
-        print("Login successful")
-    else:
-        print(f"Login failed: {res.text}")
-        return False
-    return True
+        with self.app.app_context():
+            db.init_db()
+            # Create a dummy team and user
+            database = db.get_db()
+            database.execute('INSERT INTO teams (team_number, team_name) VALUES (254, "Cheesy Poofs")')
+            database.execute('INSERT INTO teams (team_number, team_name) VALUES (1678, "Citrus Circuits")')
+            database.execute('INSERT INTO users (google_id, email, name, team_id) VALUES ("g123", "test@example.com", "Test User", 1)')
+            database.commit()
 
-def test_match_flow():
-    print("\nTesting Match Flow...")
-    # Create Match
-    res = SESSION.post(f'{BASE_URL}/api/matches', json={
-        'match_number': 1,
-        'match_type': 'Qualification'
-    })
-    
-    match_id = None
-    if res.status_code == 201:
-        data = res.json()
-        match_id = data['id']
-        print(f"Match created: ID {match_id}")
-    else:
-        print(f"Match creation failed: {res.text}")
-        return False
+    def login(self):
+        with self.client.session_transaction() as sess:
+            sess['user_id'] = 1
 
-    # Get Match Data
-    res = SESSION.get(f'{BASE_URL}/api/matches/{match_id}/data')
-    if res.status_code == 200:
-        print("Got match data")
-    else:
-        print(f"Failed to get match data: {res.text}")
-        return False
+    def test_match_creation_and_drawings(self):
+        self.login()
+        # Create Match
+        res = self.client.post('/api/matches', json={
+            'match_number': 1,
+            'match_type': 'Qualification'
+        })
+        self.assertEqual(res.status_code, 201)
+        match_id = res.json['id']
 
-    # Send Message
-    res = SESSION.post(f'{BASE_URL}/api/matches/{match_id}/messages', json={
-        'content': 'Hello Alliance!'
-    })
-    if res.status_code == 201:
-        print("Message sent")
-    else:
-        print(f"Message send failed: {res.text}")
-        return False
-        
-    # Update Strategy
-    res = SESSION.post(f'{BASE_URL}/api/matches/{match_id}/strategy', json={
-        'phase': 'Autonomous',
-        'text_content': 'Score 4 coral on L4'
-    })
-    if res.status_code == 200:
-        print("Strategy updated")
-    else:
-        print(f"Strategy update failed: {res.text}")
-        return False
-    
-    return True
+        # Verify 3 drawing rows created
+        with self.app.app_context():
+            database = db.get_db()
+            drawings = database.execute('SELECT phase FROM drawings WHERE match_id = ?', (match_id,)).fetchall()
+            phases = [row['phase'] for row in drawings]
+            self.assertIn('Autonomous', phases)
+            self.assertIn('Teleop', phases)
+            self.assertIn('Endgame', phases)
+            self.assertEqual(len(phases), 3)
+
+        # Verify API returns them correctly
+        res = self.client.get(f'/api/matches/{match_id}/data')
+        self.assertEqual(res.status_code, 200)
+        data = res.json
+        self.assertIn('drawings', data)
+        self.assertIn('Autonomous', data['drawings'])
+
+        # Test Last Seen / Active Status
+        # The GET request above should have updated last_seen
+        with self.app.app_context():
+            database = db.get_db()
+            alliance = database.execute('SELECT last_seen FROM match_alliances WHERE match_id = ? AND team_id = 1', (match_id,)).fetchone()
+            self.assertIsNotNone(alliance['last_seen'])
+
+        # Test Updating Drawing
+        drawing_data = json.dumps([{'color': 'red', 'points': [{'x': 10, 'y': 10}]}])
+        res = self.client.post(f'/api/matches/{match_id}/drawing', json={
+            'phase': 'Autonomous',
+            'drawing_data': drawing_data
+        })
+        self.assertEqual(res.status_code, 200)
+
+        # Verify only Autonomous updated
+        with self.app.app_context():
+             database = db.get_db()
+             auto = database.execute("SELECT drawing_data_json FROM drawings WHERE match_id = ? AND phase = 'Autonomous'", (match_id,)).fetchone()
+             teleop = database.execute("SELECT drawing_data_json FROM drawings WHERE match_id = ? AND phase = 'Teleop'", (match_id,)).fetchone()
+             
+             self.assertEqual(auto['drawing_data_json'], drawing_data)
+             self.assertEqual(teleop['drawing_data_json'], '{}')
+
+    def test_invites(self):
+        self.login()
+        # Create Match
+        res = self.client.post('/api/matches', json={'match_number': 2, 'match_type': 'Qualification'})
+        match_id = res.json['id']
+
+        # Invite Team 1678 (id 2)
+        res = self.client.post('/api/invites', json={
+            'match_id': match_id,
+            'to_team_number': 1678
+        })
+        self.assertEqual(res.status_code, 201)
+
+        # Verify Invite
+        with self.app.app_context():
+            database = db.get_db()
+            invite = database.execute('SELECT * FROM invites WHERE match_id = ?', (match_id,)).fetchone()
+            self.assertEqual(invite['to_team_id'], 2)
+            self.assertEqual(invite['status'], 'Pending')
 
 if __name__ == '__main__':
-    try:
-        if test_auth():
-            test_match_flow()
-    except requests.exceptions.ConnectionError:
-        print("Error: Flask server is not running. Please run 'flask --app app run' in a separate terminal.")
+    unittest.main()

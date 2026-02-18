@@ -15,10 +15,20 @@ CREATE TABLE teams (
 
 CREATE TABLE users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
+    google_id TEXT UNIQUE,
+    email TEXT UNIQUE NOT NULL,
+    password_hash TEXT,
+    name TEXT,
     team_id INTEGER NOT NULL,
     FOREIGN KEY (team_id) REFERENCES teams (id)
+);
+
+CREATE TABLE password_resets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    token TEXT UNIQUE NOT NULL,
+    expires_at DATETIME NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users (id)
 );
 
 CREATE TABLE matches (
@@ -34,6 +44,7 @@ CREATE TABLE match_alliances (
     match_id INTEGER NOT NULL,
     team_id INTEGER NOT NULL,
     alliance_color TEXT NOT NULL, -- 'Red', 'Blue'
+    last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (match_id) REFERENCES matches (id),
     FOREIGN KEY (team_id) REFERENCES teams (id)
 );

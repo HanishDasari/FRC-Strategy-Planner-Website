@@ -6,6 +6,8 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 from werkzeug.security import generate_password_hash, check_password_hash
 import db
 import uuid
+import random
+import string
 from datetime import datetime, timedelta
 
 socketio = SocketIO()
@@ -144,14 +146,84 @@ def create_app(test_config=None):
         else:
             team_id = team['id']
 
+        # Create User
+        cursor = database.execute(
+            'INSERT INTO users (email, name, password_hash, team_id, is_verified) VALUES (?, ?, ?, ?, ?)',
+            (email, name, generate_password_hash(password), team_id, 0)
+        )
+        user_id = cursor.lastrowid
+
+        # Generate Verification Code
+        code = ''.join(random.choices(string.digits, k=6))
+        expires_at = datetime.now() + timedelta(minutes=15)
         database.execute(
-            'INSERT INTO users (email, name, password_hash, team_id) VALUES (?, ?, ?, ?)',
-            (email, name, generate_password_hash(password), team_id)
+            'INSERT INTO email_verifications (user_id, code, expires_at) VALUES (?, ?, ?)',
+            (user_id, code, expires_at)
         )
         database.commit()
 
-        flash("Registration successful. Please login.")
-        return redirect(url_for('index'))
+        # "Send" Email
+        print(f"\n--- EMAIL VERIFICATION DEBUG ---\nUser: {email}\nCode: {code}\n--------------------------------\n")
+        
+        session['pending_verification_user_id'] = user_id
+        flash("Registration successful. Please enter the verification code sent to your email (check server console).")
+        return redirect(url_for('verify_email_page'))
+
+    @app.route('/verify-email')
+    def verify_email_page():
+        if 'pending_verification_user_id' not in session:
+            return redirect(url_for('index'))
+        return render_template('verify_email.html')
+
+    @app.route('/auth/verify-email', methods=('POST',))
+    def auth_verify_email():
+        user_id = session.get('pending_verification_user_id')
+        code = request.form.get('code')
+
+        if not user_id or not code:
+            flash("Missing information.")
+            return redirect(url_for('verify_email_page'))
+
+        database = db.get_db()
+        verification = database.execute(
+            'SELECT * FROM email_verifications WHERE user_id = ? AND code = ? AND expires_at > ?',
+            (user_id, code, datetime.now())
+        ).fetchone()
+
+        if verification:
+            database.execute('UPDATE users SET is_verified = 1 WHERE id = ?', (user_id,))
+            database.execute('DELETE FROM email_verifications WHERE user_id = ?', (user_id,))
+            database.commit()
+            session.pop('pending_verification_user_id', None)
+            session['user_id'] = user_id
+            flash("Email verified successfully!")
+            return redirect(url_for('dashboard'))
+        
+        flash("Invalid or expired verification code.")
+        return redirect(url_for('verify_email_page'))
+
+    @app.route('/auth/resend-verification')
+    def resend_verification():
+        user_id = session.get('pending_verification_user_id')
+        if not user_id:
+            return redirect(url_for('index'))
+
+        database = db.get_db()
+        user = database.execute('SELECT email FROM users WHERE id = ?', (user_id,)).fetchone()
+        
+        if user:
+            code = ''.join(random.choices(string.digits, k=6))
+            expires_at = datetime.now() + timedelta(minutes=15)
+            database.execute('DELETE FROM email_verifications WHERE user_id = ?', (user_id,))
+            database.execute(
+                'INSERT INTO email_verifications (user_id, code, expires_at) VALUES (?, ?, ?)',
+                (user_id, code, expires_at)
+            )
+            database.commit()
+            print(f"\n--- EMAIL VERIFICATION DEBUG (RESEND) ---\nUser: {user['email']}\nCode: {code}\n-----------------------------------------\n")
+            flash("A new verification code has been sent.")
+        
+        return redirect(url_for('verify_email_page'))
 
     @app.route('/auth/login', methods=('POST',))
     def auth_login():
@@ -164,6 +236,11 @@ def create_app(test_config=None):
         ).fetchone()
 
         if user and user['password_hash'] and check_password_hash(user['password_hash'], password):
+            if not user['is_verified']:
+                session['pending_verification_user_id'] = user['id']
+                flash("Please verify your email to access your account.")
+                return redirect(url_for('verify_email_page'))
+                
             session.clear()
             session['user_id'] = user['id']
             return redirect(url_for('dashboard'))
@@ -301,8 +378,8 @@ def create_app(test_config=None):
 
             # Create User
             cursor = database.execute(
-                'INSERT INTO users (google_id, email, name, team_id) VALUES (?, ?, ?, ?)',
-                (user_info['sub'], user_info['email'], user_info.get('name'), team_id)
+                'INSERT INTO users (google_id, email, name, team_id, is_verified) VALUES (?, ?, ?, ?, ?)',
+                (user_info['sub'], user_info['email'], user_info.get('name'), team_id, 1)
             )
             user_id = cursor.lastrowid
             database.commit()

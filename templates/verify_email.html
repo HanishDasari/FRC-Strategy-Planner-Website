@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verify Email - FRC Strategy Planner</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .verify-container {
+            max-width: 400px;
+            margin: 100px auto;
+            padding: 30px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .verify-container h2 {
+            margin-bottom: 20px;
+            color: #333;
+        }
+        .verify-container p {
+            color: #666;
+            margin-bottom: 20px;
+        }
+        .code-input {
+            width: 100%;
+            padding: 12px;
+            font-size: 24px;
+            letter-spacing: 8px;
+            text-align: center;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .btn-primary {
+            width: 100%;
+            padding: 12px;
+            background: #2563eb;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .btn-primary:hover {
+            background: #1d4ed8;
+        }
+        .resend-link {
+            display: block;
+            margin-top: 20px;
+            color: #2563eb;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        .resend-link:hover {
+            text-decoration: underline;
+        }
+        .flash-messages {
+            margin-bottom: 20px;
+            list-style: none;
+            padding: 0;
+        }
+        .flash-messages li {
+            padding: 10px;
+            background: #fee2e2;
+            color: #b91c1c;
+            border-radius: 6px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="verify-container">
+        <h2>Verify Your Email</h2>
+        <p>Enter the 6-digit code sent to your email.</p>
+        
+        {% with messages = get_flashed_messages() %}
+          {% if messages %}
+            <ul class="flash-messages">
+              {% for message in messages %}
+                <li>{{ message }}</li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+        {% endwith %}
+
+        <form action="{{ url_for('auth_verify_email') }}" method="POST">
+            <input type="text" name="code" class="code-input" placeholder="000000" maxlength="6" required autofocus>
+            <button type="submit" class="btn-primary">Verify Email</button>
+        </form>
+
+        <a href="{{ url_for('resend_verification') }}" class="resend-link">Didn't receive a code? Resend</a>
+        <br>
+        <a href="{{ url_for('logout') }}" class="resend-link" style="color: #666;">Logout and try again</a>
+    </div>
+</body>
+</html>

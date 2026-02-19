@@ -2,6 +2,8 @@ DROP TABLE IF EXISTS drawings;
 DROP TABLE IF EXISTS strategies;
 DROP TABLE IF EXISTS messages;
 DROP TABLE IF EXISTS invites;
+DROP TABLE IF EXISTS password_resets;
+DROP TABLE IF EXISTS email_verifications;
 DROP TABLE IF EXISTS match_alliances;
 DROP TABLE IF EXISTS matches;
 DROP TABLE IF EXISTS users;
@@ -20,7 +22,16 @@ CREATE TABLE users (
     password_hash TEXT,
     name TEXT,
     team_id INTEGER NOT NULL,
+    is_verified INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (team_id) REFERENCES teams (id)
+);
+
+CREATE TABLE email_verifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    code TEXT NOT NULL,
+    expires_at DATETIME NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users (id)
 );
 
 CREATE TABLE password_resets (

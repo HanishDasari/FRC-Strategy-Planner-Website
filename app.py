@@ -3,6 +3,7 @@ import functools
 from flask import Flask, render_template, request, redirect, url_for, flash, session, g, jsonify
 from authlib.integrations.flask_client import OAuth
 from flask_socketio import SocketIO, emit, join_room, leave_room
+from flask_mail import Mail, Message
 from werkzeug.security import generate_password_hash, check_password_hash
 import db
 import uuid
@@ -11,8 +12,12 @@ import string
 from datetime import datetime, timedelta
 
 socketio = SocketIO()
+mail = Mail()
 
 def create_app(test_config=None):
+    # Allow OAuth over HTTP for development (required for WiFi access/nip.io)
+    os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+    
     # create and configure the app
     app = Flask(__name__, instance_relative_config=True)
     app.config.from_mapping(
@@ -49,6 +54,7 @@ def create_app(test_config=None):
 
     db.init_app(app)
     socketio.init_app(app, cors_allowed_origins="*")
+    mail.init_app(app)
 
     import traceback
     @app.errorhandler(500)
@@ -99,6 +105,16 @@ def create_app(test_config=None):
     @login_required
     def dashboard():
         return render_template('dashboard.html')
+
+    def send_email(subject, recipient, body):
+        msg = Message(subject, recipients=[recipient])
+        msg.body = body
+        try:
+            mail.send(msg)
+            return True
+        except Exception as e:
+            print(f"Error sending email: {e}")
+            return False
 
     # Auth API
     # Auth API
@@ -163,7 +179,12 @@ def create_app(test_config=None):
         database.commit()
 
         # "Send" Email
-        print(f"\n--- EMAIL VERIFICATION DEBUG ---\nUser: {email}\nCode: {code}\n--------------------------------\n")
+        email_body = f"Hello {name},\n\nYour verification code is: {code}\n\nThis code will expire in 15 minutes."
+        if send_email("Verify Your Email", email, email_body):
+            flash("Registration successful. Please enter the verification code sent to your email.")
+        else:
+            flash("Registration successful, but there was an error sending the verification email. Please check the server console for the code.")
+            print(f"\n--- EMAIL VERIFICATION DEBUG ---\nUser: {email}\nCode: {code}\n--------------------------------\n")
         
         session['pending_verification_user_id'] = user_id
         flash("Registration successful. Please enter the verification code sent to your email (check server console).")
@@ -220,7 +241,12 @@ def create_app(test_config=None):
                 (user_id, code, expires_at)
             )
             database.commit()
-            print(f"\n--- EMAIL VERIFICATION DEBUG (RESEND) ---\nUser: {user['email']}\nCode: {code}\n-----------------------------------------\n")
+            email_body = f"Your new verification code is: {code}\n\nThis code will expire in 15 minutes."
+            if send_email("New Verification Code", user['email'], email_body):
+                flash("A new verification code has been sent.")
+            else:
+                flash("There was an error sending the verification email. Please check the server console.")
+                print(f"\n--- EMAIL VERIFICATION DEBUG (RESEND) ---\nUser: {user['email']}\nCode: {code}\n-----------------------------------------\n")
             flash("A new verification code has been sent.")
         
         return redirect(url_for('verify_email_page'))
@@ -268,8 +294,12 @@ def create_app(test_config=None):
             database.commit()
             
             reset_link = url_for('reset_password_page', token=token, _external=True)
-            print(f"\n--- PASSWORD RESET DEBUG ---\nUser: {email}\nLink: {reset_link}\n----------------------------\n")
-            flash("If that email is registered, a reset link has been sent (check server console).")
+            email_body = f"Hi,\n\nYou requested a password reset. Click the link below to reset your password:\n{reset_link}\n\nIf you did not request this, please ignore this email."
+            if send_email("Password Reset Request", email, email_body):
+                flash("If that email is registered, a reset link has been sent.")
+            else:
+                flash("If that email is registered, a reset link has been sent (check server console).")
+                print(f"\n--- PASSWORD RESET DEBUG ---\nUser: {email}\nLink: {reset_link}\n----------------------------\n")
         else:
             flash("If that email is registered, a reset link has been sent.")
             
@@ -786,4 +816,4 @@ def create_app(test_config=None):
 
 if __name__ == '__main__':
     app = create_app()
-    socketio.run(app, host='127.0.0.1', port=5000, debug=True)
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True)

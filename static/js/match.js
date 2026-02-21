@@ -139,11 +139,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     fieldImg.onload = () => {
         // Swap width and height for 90-degree rotation
-        canvas.width = fieldImg.naturalHeight;
-        canvas.height = fieldImg.naturalWidth;
+        canvas.width = fieldImg.naturalHeight || 800;
+        canvas.height = fieldImg.naturalWidth || 500;
         fieldImageLoaded = true;
         renderDrawings(); // initial render once image ready
     };
+
+    // If image already loaded or failed
+    if (fieldImg.complete) {
+        fieldImg.onload();
+    }
 
     function drawField() {
         if (fieldImageLoaded) {
@@ -215,8 +220,10 @@ document.addEventListener('DOMContentLoaded', () => {
         state.lastX = e.clientX - rect.left;
         state.lastY = e.clientY - rect.top;
 
-        // Ensure array exists
-        if (!state.drawingData[state.phase]) state.drawingData[state.phase] = [];
+        // Ensure array exists and handles potential object-from-server issue
+        if (!state.drawingData[state.phase] || !Array.isArray(state.drawingData[state.phase])) {
+            state.drawingData[state.phase] = [];
+        }
 
         // Start new path in current phase
         state.drawingData[state.phase].push({
@@ -325,8 +332,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (data.drawings) {
             for (const [phase, json] of Object.entries(data.drawings)) {
                 try {
-                    state.drawingData[phase] = JSON.parse(json);
-                } catch (e) { }
+                    const parsed = JSON.parse(json);
+                    state.drawingData[phase] = Array.isArray(parsed) ? parsed : [];
+                } catch (e) {
+                    state.drawingData[phase] = [];
+                }
             }
             renderDrawings();
         }

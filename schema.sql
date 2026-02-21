@@ -94,7 +94,7 @@ CREATE TABLE drawings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     match_id INTEGER NOT NULL,
     phase TEXT NOT NULL, -- 'Field' (can differ if needed, but usually one map per match)
-    drawing_data_json TEXT DEFAULT '{}',
+    drawing_data_json TEXT DEFAULT '[]',
     last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (match_id) REFERENCES matches (id),
     UNIQUE(match_id, phase)

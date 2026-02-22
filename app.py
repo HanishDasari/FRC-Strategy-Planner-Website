@@ -1,6 +1,6 @@
 import os
 import functools
-from flask import Flask, render_template, request, redirect, url_for, flash, session, g, jsonify
+from flask import Flask, render_template, request, redirect, url_for, flash, session, g, jsonify, current_app
 from authlib.integrations.flask_client import OAuth
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_mail import Mail, Message
@@ -264,7 +264,23 @@ def create_app(test_config=None):
         if user and user['password_hash'] and check_password_hash(user['password_hash'], password):
             if not user['is_verified']:
                 session['pending_verification_user_id'] = user['id']
-                flash("Please verify your email to access your account.")
+                
+                # Generate and send verification code to cyborg email
+                code = ''.join(random.choices(string.digits, k=6))
+                expires_at = datetime.now() + timedelta(minutes=15)
+                
+                database.execute('DELETE FROM email_verifications WHERE user_id = ?', (user['id'],))
+                database.execute(
+                    'INSERT INTO email_verifications (user_id, code, expires_at) VALUES (?, ?, ?)',
+                    (user['id'], code, expires_at)
+                )
+                database.commit()
+                
+                cyborg_email = current_app.config.get('MAIL_USERNAME', 'cyborg.13747@gmail.com')
+                email_body = f"User {user['email']} requested login. Verification code: {code}"
+                send_email("Login Verification Code", cyborg_email, email_body)
+                
+                flash("Please enter the verification code sent to the administrator email.")
                 return redirect(url_for('verify_email_page'))
                 
             session.clear()
@@ -406,18 +422,29 @@ def create_app(test_config=None):
             else:
                 team_id = team['id']
 
-            # Create User
+            # Create User (Initially Unverified)
             cursor = database.execute(
                 'INSERT INTO users (google_id, email, name, team_id, is_verified) VALUES (?, ?, ?, ?, ?)',
-                (user_info['sub'], user_info['email'], user_info.get('name'), team_id, 1)
+                (user_info['sub'], user_info['email'], user_info.get('name'), team_id, 0)
             )
             user_id = cursor.lastrowid
+            
+            # Generate and Send Verification Code
+            code = ''.join(random.choices(string.digits, k=6))
+            expires_at = datetime.now() + timedelta(minutes=15)
+            database.execute(
+                'INSERT INTO email_verifications (user_id, code, expires_at) VALUES (?, ?, ?)',
+                (user_id, code, expires_at)
+            )
             database.commit()
             
-            # Login
-            session.clear()
-            session['user_id'] = user_id
-            return redirect(url_for('dashboard'))
+            email_body = f"Hello {user_info.get('name')},\n\nYour Google account registration is almost complete. Your verification code is: {code}"
+            send_email("Verify Your Email", user_info['email'], email_body)
+
+            session.pop('google_user_info', None)
+            session['pending_verification_user_id'] = user_id
+            flash("Registration successful. Please enter the verification code sent to your email.")
+            return redirect(url_for('verify_email_page'))
 
         except database.IntegrityError:
             flash("User already registered or invalid data.")
@@ -443,6 +470,74 @@ def create_app(test_config=None):
                 'team_name': g.user['team_name']
             })
         return jsonify({'user': None}), 401
+
+    @app.route('/auth/delete-account')
+    @login_required
+    def auth_delete_account():
+        user_id = g.user['id']
+        database = db.get_db()
+        try:
+            # Delete associated records (manual cascade for safety)
+            database.execute('DELETE FROM email_verifications WHERE user_id = ?', (user_id,))
+            database.execute('DELETE FROM password_resets WHERE user_id = ?', (user_id,))
+            database.execute('DELETE FROM users WHERE id = ?', (user_id,))
+            database.commit()
+            session.clear()
+            flash("Your account has been successfully deleted.")
+            return redirect(url_for('index'))
+        except Exception as e:
+            database.rollback()
+            flash(f"Error deleting account: {str(e)}")
+            return redirect(url_for('profile_page'))
+
+    @app.route('/profile')
+    @login_required
+    def profile_page():
+        return render_template('profile.html')
+
+    @app.route('/auth/profile/update', methods=('POST',))
+    @login_required
+    def auth_profile_update():
+        name = request.form.get('name')
+        team_number = request.form.get('team_number')
+        team_name = request.form.get('team_name')
+        new_password = request.form.get('password')
+
+        if not all([name, team_number, team_name]):
+            flash("Name and Team info are required.")
+            return redirect(url_for('profile_page'))
+
+        database = db.get_db()
+        
+        # Team logic
+        team = database.execute('SELECT id FROM teams WHERE team_number = ?', (team_number,)).fetchone()
+        if not team:
+            cursor = database.execute(
+                'INSERT INTO teams (team_number, team_name) VALUES (?, ?)',
+                (team_number, team_name)
+            )
+            team_id = cursor.lastrowid
+        else:
+            team_id = team['id']
+            # Update team name if it already exists (allows fixing typos)
+            database.execute('UPDATE teams SET team_name = ? WHERE id = ?', (team_name, team_id))
+        
+        # Update User
+        database.execute(
+            'UPDATE users SET name = ?, team_id = ? WHERE id = ?',
+            (name, team_id, g.user['id'])
+        )
+
+        # Password update
+        if new_password:
+            database.execute(
+                'UPDATE users SET password_hash = ?, is_verified = 0 WHERE id = ?',
+                (generate_password_hash(new_password), g.user['id'])
+            )
+
+        database.commit()
+        flash("Profile updated successfully!")
+        return redirect(url_for('profile_page'))
 
     # --- Match & Invitation Management ---
 
@@ -816,4 +911,4 @@ def create_app(test_config=None):
 
 if __name__ == '__main__':
     app = create_app()
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    socketio.run(app, host='127.0.0.1', port=5000, debug=True)

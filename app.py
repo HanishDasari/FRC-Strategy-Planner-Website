@@ -583,7 +583,7 @@ def create_app(test_config=None):
         # GET: List matches for the user's team (either created or invited)
         matches = database.execute(
             '''
-            SELECT m.id, m.match_number, m.match_type, t.team_number as creator_team_number
+            SELECT m.id, m.match_number, m.match_type, t.team_number as creator_team_number, m.creator_team_id
             FROM matches m
             JOIN teams t ON m.creator_team_id = t.id
             JOIN match_alliances ma ON m.id = ma.match_id
@@ -607,8 +607,8 @@ def create_app(test_config=None):
         if not match:
             return jsonify({'error': 'Match not found'}), 404
             
-        if match['creator_team_id'] != g.user['team_id']:
-            return jsonify({'error': 'Only the creator team can delete this match'}), 403
+        # Relaxed check: as long as match exists and user is logged in (handled by decorator), allow deletion.
+        # User requested the delete button/ability to be available to everyone at all times.
 
         try:
             # Cascading deletion
@@ -653,6 +653,15 @@ def create_app(test_config=None):
             (match_id, g.user['team_id'], to_team['id'])
         )
         database.commit()
+        
+        # Emit real-time invite via Socket.IO
+        socketio.emit('new_invite', {
+            'id': database.execute('SELECT last_insert_rowid()').fetchone()[0],
+            'match_id': match_id,
+            'match_number': database.execute('SELECT match_number FROM matches WHERE id = ?', (match_id,)).fetchone()['match_number'],
+            'from_team_number': g.user['team_number']
+        }, room=f"team_{to_team['id']}")
+
         return jsonify({'message': 'Invite sent'}), 201
         
     @app.route('/api/invites/pending', methods=('GET',))
@@ -695,16 +704,32 @@ def create_app(test_config=None):
             )
         
         database.commit()
+        
+        # Notify both teams via socket to refresh their views
+        socketio.emit('refresh_data', {'match_id': invite['match_id']}, room=str(invite['match_id']))
+        
         return jsonify({'message': f'Invite {status}'}), 200
 
     @app.route('/match/<int:match_id>')
     @login_required
     def match_room(match_id):
+        database = db.get_db()
+        # Verify access
+        access = database.execute(
+            'SELECT id FROM match_alliances WHERE match_id = ? AND team_id = ?',
+            (match_id, g.user['team_id'])
+        ).fetchone()
+
+        if not access:
+            flash("You do not have access to this match.")
+            return redirect(url_for('dashboard'))
+
         # Pass current user info to template for JS
         return render_template('match.html', 
                              match_id=match_id, 
                              current_team_number=g.user['team_number'],
-                             current_user_id=g.user['id'])
+                             current_user_id=g.user['id'],
+                             current_team_id=g.user['team_id'])
 
     # --- Collaboration API (Polling) ---
 
@@ -855,22 +880,92 @@ def create_app(test_config=None):
         database.commit()
         return jsonify({'message': 'Drawing saved'}), 200
 
+    @app.route('/api/teams/<int:team_number>/status')
+    @login_required
+    def team_status(team_number):
+        database = db.get_db()
+        # Check if team exists and if any user from that team has been seen recently
+        # We'll check match_alliances last_seen (active in any room)
+        team = database.execute('SELECT id FROM teams WHERE team_number = ?', (team_number,)).fetchone()
+        if not team:
+            return jsonify({'active': False, 'exists': False})
+        
+        # Check if any alliance record for this team has been updated in the last 60 seconds
+        active = database.execute(
+            '''
+            SELECT 1 FROM match_alliances 
+            WHERE team_id = ? AND (CAST(strftime('%s', 'now') AS INTEGER) - CAST(strftime('%s', last_seen) AS INTEGER)) < 60
+            LIMIT 1
+            ''', (team['id'],)
+        ).fetchone()
+        
+        return jsonify({'active': bool(active), 'exists': True})
+
     # --- Socket.IO Events ---
 
     @socketio.on('join')
     def on_join(data):
-        room = str(data['match_id'])
-        join_room(room)
-        print(f"User joined room: {room}")
+        match_id = data.get('match_id')
+        user_id = session.get('user_id')
+        
+        if not match_id or not user_id:
+            return
+
+        with app.app_context():
+            # Get user's team_id
+            database = db.get_db()
+            user = database.execute('SELECT team_id FROM users WHERE id = ?', (user_id,)).fetchone()
+            if not user:
+                return
+            
+            # Join personal team room for invites
+            join_room(f"team_{user['team_id']}")
+            
+            # Verify match access
+            access = database.execute(
+                'SELECT id FROM match_alliances WHERE match_id = ? AND team_id = ?',
+                (match_id, user['team_id'])
+            ).fetchone()
+
+            if access:
+                room = str(match_id)
+                join_room(room)
+                print(f"User {user_id} joined room: {room} and team_room: team_{user['team_id']}")
+            else:
+                print(f"User {user_id} denied access to room: {match_id}")
 
     @socketio.on('chat_message')
     def handle_chat(data):
-        room = str(data['match_id'])
+        match_id = data.get('match_id')
+        user_id = session.get('user_id')
+        if not match_id or not user_id: return
+
+        room = str(match_id)
         database = get_db_for_socket()
         try:
+            # Verify access and get team info
+            user = database.execute(
+                'SELECT u.team_id, t.team_number '
+                'FROM users u JOIN teams t ON u.team_id = t.id '
+                'WHERE u.id = ?', (user_id,)
+            ).fetchone()
+            
+            if not user: return
+            
+            access = database.execute(
+                'SELECT id FROM match_alliances WHERE match_id = ? AND team_id = ?',
+                (match_id, user['team_id'])
+            ).fetchone()
+
+            if not access: return
+
+            # Override/Inject safe data
+            data['team_id'] = user['team_id']
+            data['team_number'] = user['team_number']
+
             database.execute(
                 'INSERT INTO messages (match_id, sender_team_id, content) VALUES (?, ?, ?)',
-                (data['match_id'], data['team_id'], data['content'])
+                (match_id, user['team_id'], data['content'])
             )
             database.commit()
             emit('message', data, room=room)
@@ -879,12 +974,27 @@ def create_app(test_config=None):
 
     @socketio.on('update_drawing')
     def handle_drawing(data):
-        room = str(data['match_id'])
+        match_id = data.get('match_id')
+        user_id = session.get('user_id')
+        if not match_id or not user_id: return
+
+        room = str(match_id)
         database = get_db_for_socket()
         try:
+            # Verify access
+            user = database.execute('SELECT team_id FROM users WHERE id = ?', (user_id,)).fetchone()
+            if not user: return
+            
+            access = database.execute(
+                'SELECT id FROM match_alliances WHERE match_id = ? AND team_id = ?',
+                (match_id, user['team_id'])
+            ).fetchone()
+
+            if not access: return
+
             database.execute(
                 'UPDATE drawings SET drawing_data_json = ?, last_updated = CURRENT_TIMESTAMP WHERE match_id = ? AND phase = ?',
-                (data['drawing_data'], data['match_id'], data['phase'])
+                (data['drawing_data'], match_id, data['phase'])
             )
             database.commit()
             emit('drawing_update', data, room=room, include_self=False)
@@ -893,12 +1003,27 @@ def create_app(test_config=None):
 
     @socketio.on('update_strategy')
     def handle_strategy(data):
-        room = str(data['match_id'])
+        match_id = data.get('match_id')
+        user_id = session.get('user_id')
+        if not match_id or not user_id: return
+
+        room = str(match_id)
         database = get_db_for_socket()
         try:
+            # Verify access
+            user = database.execute('SELECT team_id FROM users WHERE id = ?', (user_id,)).fetchone()
+            if not user: return
+            
+            access = database.execute(
+                'SELECT id FROM match_alliances WHERE match_id = ? AND team_id = ?',
+                (match_id, user['team_id'])
+            ).fetchone()
+
+            if not access: return
+
             database.execute(
                 'UPDATE strategies SET text_content = ? WHERE match_id = ? AND phase = ?',
-                (data['text_content'], data['match_id'], data['phase'])
+                (data['text_content'], match_id, data['phase'])
             )
             database.commit()
             emit('strategy_update', data, room=room, include_self=False)

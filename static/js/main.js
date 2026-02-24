@@ -1,4 +1,5 @@
 // --- Dashboard Logic ---
+let CURRENT_USER_TEAM_ID = null;
 
 document.addEventListener('DOMContentLoaded', () => {
     // Auth Tabs
@@ -58,13 +59,71 @@ async function initDashboard() {
                     createForm.reset();
                     loadMatches();
                 } else {
-                    alert('Failed to create match');
+                    const result = await res.json();
+                    alert(result.error || 'Failed to create match');
                 }
             } catch (err) {
                 console.error(err);
+                alert('An error occurred while creating the match');
             }
         });
     }
+
+    // Socket.IO for real-time invites
+    const socket = io();
+    socket.on('connect', () => {
+        console.log("Connected to dashboard socket");
+        // Join team room for invites
+        socket.emit('join', { match_id: null });
+    });
+
+    socket.on('new_invite', (invite) => {
+        showNotification(invite);
+        loadInvites();
+    });
+
+    socket.on('refresh_data', () => {
+        loadMatches();
+        loadInvites();
+    });
+}
+
+function showNotification(invite) {
+    const notification = document.getElementById('invite-notification');
+    const title = document.getElementById('notification-title');
+    const message = document.getElementById('notification-message');
+    const acceptBtn = document.getElementById('notification-accept-btn');
+    const declineBtn = document.getElementById('notification-decline-btn');
+
+    if (!notification) return;
+
+    title.textContent = "New Match Invite!";
+    message.textContent = `Team ${invite.from_team_number} has invited you to Match ${invite.match_number}`;
+
+    const handleResponse = async (status) => {
+        try {
+            await fetch(`/api/invites/${invite.id}/respond`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: status === 'accept' ? 'Accepted' : 'Declined' })
+            });
+            notification.classList.remove('show');
+            loadInvites();
+            loadMatches();
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
+    acceptBtn.onclick = () => handleResponse('accept');
+    declineBtn.onclick = () => handleResponse('decline');
+
+    notification.classList.add('show');
+
+    // Auto-hide after 10 seconds
+    setTimeout(() => {
+        notification.classList.remove('show');
+    }, 10000);
 }
 
 async function loadUserInfo() {
@@ -77,6 +136,7 @@ async function loadUserInfo() {
             if (userInfo) {
                 userInfo.textContent = `${displayName} | Team ${data.team_number}`;
             }
+            CURRENT_USER_TEAM_ID = data.team_id;
         }
     } catch (e) {
         console.error("Failed to load user info", e);

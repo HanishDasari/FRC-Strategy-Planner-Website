@@ -6,9 +6,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FRC Strategy Platform - Dashboard</title>
     <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.js"></script>
 </head>
 
 <body>
+    <!-- Invite Notification Popup -->
+    <div id="invite-notification" class="invite-notification">
+        <div class="invite-notification-content">
+            <div class="invite-notification-text">
+                <strong id="notification-title">New Invite!</strong>
+                <small id="notification-message">A team has invited you to a match</small>
+            </div>
+            <div class="invite-notification-actions">
+                <button class="btn-accept" id="notification-accept-btn">Accept</button>
+                <button class="btn-decline" id="notification-decline-btn">Decline</button>
+            </div>
+        </div>
+    </div>
+
     <div class="container">
         <header
             style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; padding: 1rem 0;">

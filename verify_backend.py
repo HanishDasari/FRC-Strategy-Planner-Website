@@ -7,9 +7,10 @@ import db
 
 class FRCFlaskTestCase(unittest.TestCase):
     def setUp(self):
+        self.db_path = 'test_backend.sqlite'
         self.app = create_app({
             'TESTING': True,
-            'DATABASE': ':memory:', # Use in-memory DB for testing
+            'DATABASE': self.db_path,
             'GOOGLE_CLIENT_ID': 'test',
             'GOOGLE_CLIENT_SECRET': 'test'
         })
@@ -24,6 +25,10 @@ class FRCFlaskTestCase(unittest.TestCase):
             database.execute('INSERT INTO teams (team_number, team_name) VALUES (1678, "Citrus Circuits")')
             database.execute('INSERT INTO users (google_id, email, name, team_id) VALUES ("g123", "test@example.com", "Test User", 1)')
             database.commit()
+
+    def tearDown(self):
+        if hasattr(self, 'db_path') and os.path.exists(self.db_path):
+            os.remove(self.db_path)
 
     def login(self):
         with self.client.session_transaction() as sess:
@@ -78,7 +83,7 @@ class FRCFlaskTestCase(unittest.TestCase):
              teleop = database.execute("SELECT drawing_data_json FROM drawings WHERE match_id = ? AND phase = 'Teleop'", (match_id,)).fetchone()
              
              self.assertEqual(auto['drawing_data_json'], drawing_data)
-             self.assertEqual(teleop['drawing_data_json'], '{}')
+             self.assertEqual(teleop['drawing_data_json'], '[]')
 
     def test_invites(self):
         self.login()

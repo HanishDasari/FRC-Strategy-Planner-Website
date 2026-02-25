@@ -10,53 +10,48 @@
 
 <body>
     <div class="container auth-container">
-        <h1 style="text-align: center; margin-bottom: 2rem;">FRC Strategy Planner</h1>
+        <h1
+            style="text-align: center; margin-bottom: 3rem; background: var(--accent-gradient); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;">
+            FRC Strategy Planner</h1>
 
         <div class="card">
             {% with messages = get_flashed_messages() %}
             {% if messages %}
             <div
-                style="color: var(--red-alliance); margin-bottom: 1rem; text-align: center; padding: 0.5rem; background: rgba(255, 0, 0, 0.1); border-radius: 4px;">
+                style="color: var(--danger); margin-bottom: 1.5rem; text-align: center; padding: 0.75rem; background: rgba(248, 81, 73, 0.1); border: 1px solid rgba(248, 81, 73, 0.2); border-radius: 10px;">
                 {{ messages[0] }}
             </div>
             {% endif %}
             {% endwith %}
 
-            <div style="padding: 1rem;">
-                <form action="/auth/login" method="POST" style="margin-bottom: 1.5rem;">
-                    <div style="margin-bottom: 1rem;">
-                        <input type="email" name="email" placeholder="Email" required
-                            style="width: 100%; padding: 0.8rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-primary);">
-                    </div>
-                    <div style="margin-bottom: 1rem;">
-                        <input type="password" name="password" placeholder="Password" required
-                            style="width: 100%; padding: 0.8rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-primary);">
-                    </div>
-                    <button type="submit" class="btn" style="width: 100%; padding: 0.8rem; font-weight: bold;">
+            <div style="padding: 0.5rem;">
+                <form action="/auth/login" method="POST" style="margin-bottom: 2rem;">
+                    <input type="email" name="email" placeholder="Email" required>
+                    <input type="password" name="password" placeholder="Password" required>
+                    <button type="submit" class="btn" style="width: 100%; padding: 1rem;">
                         Login
                     </button>
                 </form>
 
-                <div
-                    style="text-align: center; font-size: 0.9rem; margin-bottom: 1.5rem; color: var(--text-secondary);">
+                <div style="text-align: center; font-size: 0.95rem; margin-bottom: 2rem; color: var(--text-secondary);">
                     Don't have an account? <a href="/register"
-                        style="color: var(--blue-alliance); text-decoration: none;">Register</a> |
+                        style="color: var(--accent); text-decoration: none; font-weight: 600;">Register</a> |
                     <a href="/forgot-password" style="color: var(--text-secondary); text-decoration: none;">Forgot
                         Password?</a>
                 </div>
 
-                <div style="position: relative; text-align: center; margin: 1.5rem 0;">
-                    <hr style="border: 0; border-top: 1px solid var(--border-color);">
+                <div style="position: relative; text-align: center; margin: 2rem 0;">
+                    <hr style="border: 0; border-top: 1px solid var(--border);">
                     <span
-                        style="position: absolute; top: -10px; left: 50%; transform: translateX(-50%); background: var(--bg-primary); padding: 0 0.5rem; color: var(--text-secondary); font-size: 0.8rem;">
+                        style="position: absolute; top: -11px; left: 50%; transform: translateX(-50%); background: var(--card-bg); padding: 0 1rem; color: var(--text-secondary); font-size: 0.85rem; font-weight: 600;">
                         OR
                     </span>
                 </div>
 
-                <a href="/login/google" class="btn"
-                    style="width: 100%; display: flex; align-items: center; justify-content: center; text-decoration: none; padding: 0.8rem; background: #fff; color: #757575; border: 1px solid #ddd; font-weight: 500;">
+                <a href="/login/google" class="btn btn-secondary"
+                    style="width: 100%; display: flex; gap: 0.75rem; padding: 1rem; background: #ffffff; color: #1f2328; border-color: #d0d7de;">
                     <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google"
-                        style="width: 18px; margin-right: 12px;">
+                        style="width: 20px;">
                     Sign in with Google
                 </a>
             </div>

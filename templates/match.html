@@ -8,102 +8,69 @@
     <link rel="stylesheet" href="/static/css/style.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.js"></script>
     <style>
-        :root {
-            --notification-height: 80px;
-        }
-
         .match-container {
             display: grid;
-            grid-template-columns: 250px 1fr 250px 300px;
-            gap: 1rem;
-            height: calc(100vh - 80px);
-            /* Adjust for header */
-            padding: 1rem;
+            grid-template-columns: 280px 1.5fr 300px 320px;
+            gap: 1.25rem;
+            height: calc(100vh - 100px);
+            padding: 1.25rem;
             box-sizing: border-box;
         }
 
         .panel {
-            background: linear-gradient(135deg, rgba(30, 30, 40, 0.95), rgba(20, 20, 30, 0.95));
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 12px;
+            background-color: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 16px;
             display: flex;
             flex-direction: column;
             overflow: hidden;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-            backdrop-filter: blur(10px);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            transition: var(--transition);
+        }
+
+        .panel:hover {
+            border-color: #444c56;
         }
 
         .panel-header {
-            padding: 0.75rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-            font-weight: bold;
-            background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(147, 51, 234, 0.2));
-            backdrop-filter: blur(5px);
+            padding: 1rem;
+            border-bottom: 1px solid var(--border);
+            font-weight: 700;
+            background: rgba(255, 255, 255, 0.02);
+            color: var(--text-primary);
+            font-size: 0.95rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
         }
 
         .panel-content {
             flex-grow: 1;
-            padding: 0.5rem;
+            padding: 0.75rem;
             overflow-y: auto;
             position: relative;
         }
 
-        /* Chat */
-        #chat-messages {
-            flex-grow: 1;
-            overflow-y: auto;
+        /* Canvas Panel */
+        .canvas-panel {
+            background: #0d1117;
             display: flex;
             flex-direction: column;
-            gap: 0.5rem;
-            padding: 1rem;
         }
 
-        .message {
-            background: rgba(255, 255, 255, 0.05);
-            padding: 0.5rem;
-            border-radius: 4px;
-        }
-
-        .message strong {
-            color: var(--accent);
-            font-size: 0.8em;
-            display: block;
-        }
-
-        .message small {
-            color: var(--text-secondary);
-            font-size: 0.7em;
-            float: right;
-        }
-
-        /* Canvas */
         #field-canvas {
-            background-color: #333;
+            background-color: #161b22;
             cursor: crosshair;
             display: block;
             margin: 0 auto;
+            border-radius: 8px;
+            box-shadow: 0 0 0 1px var(--border);
         }
 
-        /* Controls */
-        .color-picker {
-            display: flex;
-            gap: 0.5rem;
-            padding: 0.5rem;
-            justify-content: center;
-        }
-
-        .color-btn {
-            width: 24px;
-            height: 24px;
-            border-radius: 50%;
-            border: 2px solid transparent;
-            cursor: pointer;
-        }
-
-        .color-btn.active {
-            border-color: white;
-            box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
-            transform: scale(1.1);
+        /* Responsive */
+        @media (max-width: 1400px) {
+            .match-container {
+                grid-template-columns: 240px 1.2fr 260px 280px;
+            }
         }
     </style>
 </head>
@@ -122,18 +89,18 @@
             </div>
         </div>
     </div>
-    <header
-        style="height: 50px; display: flex; align-items: center; padding: 0 1rem; border-bottom: 1px solid var(--border); justify-content: space-between;">
-        <div>
-            <a href="/dashboard" class="btn btn-secondary" style="margin-right: 1rem;">←</a>
-            <strong>Match Strategy</strong>
+
+    <header class="dashboard-header" style="height: 60px; padding: 0 2rem; margin-bottom: 0; box-sizing: border-box;">
+        <div style="display: flex; align-items: center; gap: 1.5rem;">
+            <a href="/dashboard" class="btn btn-secondary" style="padding: 0.4rem 0.8rem;">&larr;</a>
+            <h2 style="margin: 0; font-size: 1.25rem;">Match Strategy</h2>
         </div>
-        <div class="tabs">
-            <div class="tab active" data-phase="Autonomous">Autonomous</div>
-            <div class="tab" data-phase="Teleop">Teleop</div>
-            <div class="tab" data-phase="Endgame">Endgame</div>
+        <div class="phase-tabs" style="margin-bottom: 0; width: 450px;">
+            <div class="phase-tab active" data-phase="Autonomous">Auto</div>
+            <div class="phase-tab" data-phase="Teleop">Teleop</div>
+            <div class="phase-tab" data-phase="Endgame">Endgame</div>
         </div>
-        <div id="connection-status" style="font-size: 0.8rem; color: var(--text-secondary);">Connecting...</div>
+        <div id="connection-status" style="font-size: 0.85rem; font-weight: 600; color: var(--success);">Connected</div>
     </header>
 
     <div class="match-container">
@@ -141,69 +108,67 @@
         <div class="panel">
             <div class="panel-header">Strategy Notes</div>
             <textarea id="strategy-text"
-                style="height: 100%; border: none; resize: none; background: transparent; padding: 1rem;"
-                placeholder="Type strategy here..."></textarea>
-            <div style="padding: 0.5rem; border-top: 1px solid var(--border); text-align: right;">
-                <button id="save-strategy-btn" class="btn">Save</button>
+                style="height: 100%; border: none; resize: none; background: transparent; padding: 1.25rem; margin-bottom: 0;"
+                placeholder="Outline your team's strategy here..."></textarea>
+            <div
+                style="padding: 0.75rem 1rem; border-top: 1px solid var(--border); text-align: right; background: rgba(0,0,0,0.1);">
+                <button id="save-strategy-btn" class="btn" style="padding: 0.5rem 1.25rem;">Save Plan</button>
             </div>
         </div>
 
         <!-- Field Drawing -->
-        <div class="panel">
+        <div class="panel canvas-panel">
             <div class="panel-header" style="display: flex; justify-content: space-between; align-items: center;">
                 <span>Field Map</span>
                 <button id="clear-drawing-btn" class="btn btn-secondary"
-                    style="padding: 2px 8px; font-size: 0.8rem;">Clear</button>
+                    style="padding: 4px 12px; font-size: 0.75rem;">Clear All</button>
             </div>
-            <div class="panel-content"
-                style="display: flex; align-items: center; justify-content: center; background: #222;">
+            <div class="panel-content" style="display: flex; align-items: center; justify-content: center;">
                 <canvas id="field-canvas" width="600" height="300"></canvas>
             </div>
-            <div class="color-picker">
-                <div class="color-btn active" style="background: red;" data-color="red"></div>
-                <div class="color-btn" style="background: blue;" data-color="blue"></div>
-                <div class="color-btn" style="background: green;" data-color="green"></div>
-                <div class="color-btn" style="background: yellow;" data-color="yellow"></div>
-                <div class="color-btn" style="background: white;" data-color="white"></div>
+            <div class="color-picker" style="background: rgba(0,0,0,0.2); border-top: 1px solid var(--border);">
+                <div class="color-btn active" style="background: var(--red-alliance);" data-color="red"></div>
+                <div class="color-btn" style="background: var(--blue-alliance);" data-color="blue"></div>
+                <div class="color-btn" style="background: #3fb950;" data-color="green"></div>
+                <div class="color-btn" style="background: #d29922;" data-color="yellow"></div>
+                <div class="color-btn" style="background: #f0f6fc;" data-color="white"></div>
             </div>
         </div>
 
         <!-- Teams Panel -->
         <div class="panel">
-            <div class="panel-header">Teams</div>
-            <div class="panel-content" style="padding: 0;">
-                <div style="padding: 0.5rem; border-bottom: 1px solid var(--border);">
-                    <strong style="font-size: 0.85em; color: var(--text-secondary);">Active Teams</strong>
-                </div>
-                <div id="active-teams-list" style="max-height: 200px; overflow-y: auto;"></div>
+            <div class="panel-header">Alliances</div>
+            <div class="panel-content" style="padding: 0; display: flex; flex-direction: column;">
+                <div id="active-teams-list" style="flex-grow: 1; border: none; border-radius: 0; margin-top: 0;"></div>
 
-                <div style="border-top: 1px solid var(--border); padding: 0.75rem;">
-                    <strong style="font-size: 0.85em; display: block; margin-bottom: 0.5rem;">Invite Team</strong>
+                <div style="border-top: 1px solid var(--border); padding: 1.25rem; background: rgba(255,255,255,0.01);">
+                    <strong
+                        style="font-size: 0.8em; color: var(--text-secondary); text-transform: uppercase; display: block; margin-bottom: 0.75rem;">Invite
+                        Team</strong>
                     <form id="invite-team-form" style="display: flex; gap: 0.5rem;">
                         <input type="number" name="team_number" placeholder="Team #"
                             style="margin-bottom: 0; flex-grow: 1;" required>
-                        <button type="submit" class="btn" style="padding: 0.5rem 0.75rem;">Invite</button>
+                        <button type="submit" class="btn" style="padding: 0.6rem 0.8rem;">+</button>
                     </form>
                 </div>
 
-                <div style="border-top: 1px solid var(--border); padding: 0.5rem;">
+                <div style="border-top: 1px solid var(--border); padding: 1rem; background: rgba(0,0,0,0.1);">
                     <strong
-                        style="font-size: 0.85em; color: var(--text-secondary); display: block; margin-bottom: 0.5rem;">Pending
-                        Invites</strong>
-                    <div id="match-invites-list"></div>
+                        style="font-size: 0.8em; color: var(--text-secondary); text-transform: uppercase; display: block; margin-bottom: 0.75rem;">Invites</strong>
+                    <div id="match-invites-list" style="border: none; margin-top: 0;"></div>
                 </div>
             </div>
         </div>
 
         <!-- Chat -->
         <div class="panel">
-            <div class="panel-header">Chat</div>
-            <div id="chat-messages"></div>
-            <div style="padding: 0.5rem; border-top: 1px solid var(--border);">
+            <div class="panel-header">Communication</div>
+            <div id="chat-messages" style="background: rgba(0,0,0,0.05);"></div>
+            <div style="padding: 1rem; border-top: 1px solid var(--border); background: rgba(255,255,255,0.01);">
                 <form id="chat-form" style="display: flex; gap: 0.5rem;">
-                    <input type="text" name="content" placeholder="Message..." style="margin-bottom: 0; flex-grow: 1;"
-                        autocomplete="off">
-                    <button type="submit" class="btn">Send</button>
+                    <input type="text" name="content" placeholder="Send a message..."
+                        style="margin-bottom: 0; flex-grow: 1;" autocomplete="off">
+                    <button type="submit" class="btn" style="padding: 0.6rem 1rem;">Send</button>
                 </form>
             </div>
         </div>

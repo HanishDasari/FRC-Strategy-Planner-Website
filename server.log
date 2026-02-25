@@ -1,0 +1,49 @@
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 471-248-152
+(86750) wsgi starting up on http://127.0.0.1:5000
+(86750) accepted ('127.0.0.1', 51255)
+(86750) accepted ('127.0.0.1', 51256)
+127.0.0.1 - - [10/Feb/2026 16:42:19] "GET / HTTP/1.1" 200 3244 0.031932
+127.0.0.1 - - [10/Feb/2026 16:42:19] "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 369 0.001702
+127.0.0.1 - - [10/Feb/2026 16:42:19] "GET /static/css/style.css HTTP/1.1" 304 216 0.036668
+127.0.0.1 - - [10/Feb/2026 16:42:19] "GET /static/js/main.js HTTP/1.1" 304 220 0.001173
+127.0.0.1 - - [10/Feb/2026 16:42:26] "GET /login/google HTTP/1.1" 302 1803 0.348940
+127.0.0.1 - - [10/Feb/2026 16:42:31] "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 369 0.004706
+127.0.0.1 - - [10/Feb/2026 16:42:31] "GET /static/css/style.css HTTP/1.1" 304 216 0.001666
+127.0.0.1 - - [10/Feb/2026 16:42:31] "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 369 0.001185
+127.0.0.1 - - [10/Feb/2026 16:42:38] "GET /login/google HTTP/1.1" 302 1903 0.021636
+127.0.0.1 - - [10/Feb/2026 16:42:49] "GET /auth/callback?state=RHOnXjgpsU35Dq9d4kqgszNoJbtnbi&code=4%2F0ASc3gC3302QhFnirZcBHJ61mq1VXbj7tXxlkXx5SFh88OrlSbSo2y-bcaOaYA9GSY5r1LQ&scope=email+profile+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.email+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.profile+openid&authuser=0&prompt=none HTTP/1.1" 302 480 0.709647
+127.0.0.1 - - [10/Feb/2026 16:42:49] "GET /dashboard HTTP/1.1" 200 3124 0.011202
+127.0.0.1 - - [10/Feb/2026 16:42:49] "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 369 0.079473
+127.0.0.1 - - [10/Feb/2026 16:42:49] "GET /static/css/style.css HTTP/1.1" 304 216 0.011454
+127.0.0.1 - - [10/Feb/2026 16:42:49] "GET /static/js/main.js HTTP/1.1" 304 220 0.006130
+127.0.0.1 - - [10/Feb/2026 16:42:50] "GET /auth/me HTTP/1.1" 200 293 0.004399
+(86750) accepted ('127.0.0.1', 51394)
+127.0.0.1 - - [10/Feb/2026 16:42:50] "GET /api/matches HTTP/1.1" 200 382 0.004700
+127.0.0.1 - - [10/Feb/2026 16:42:50] "GET /api/invites/pending HTTP/1.1" 200 148 0.005994
+127.0.0.1 - - [10/Feb/2026 16:44:22] "GET /match/2 HTTP/1.1" 200 12698 0.026815
+127.0.0.1 - - [10/Feb/2026 16:44:22] "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 369 0.004828
+127.0.0.1 - - [10/Feb/2026 16:44:22] "GET /static/css/style.css HTTP/1.1" 304 216 0.002546
+127.0.0.1 - - [10/Feb/2026 16:44:23] "GET /static/js/match.js HTTP/1.1" 200 18637 0.005039
+127.0.0.1 - - [10/Feb/2026 16:44:24] "GET /socket.io/?EIO=4&transport=polling&t=Pn9Wp_q HTTP/1.1" 200 300 0.001418
+127.0.0.1 - - [10/Feb/2026 16:44:24] "GET /api/matches/2/data HTTP/1.1" 200 2104 0.016091
+127.0.0.1 - - [10/Feb/2026 16:44:24] "GET /static/images/FRC_Field_TopView.png HTTP/1.1" 304 229 0.010866
+127.0.0.1 - - [10/Feb/2026 16:44:24] "POST /socket.io/?EIO=4&transport=polling&t=Pn9Wq37&sid=2uzI-tBBiCbIka2FAAAA HTTP/1.1" 200 219 0.002250
+(86750) accepted ('127.0.0.1', 51820)
+127.0.0.1 - - [10/Feb/2026 16:44:24] "GET /socket.io/?EIO=4&transport=polling&t=Pn9Wq3I&sid=2uzI-tBBiCbIka2FAAAA HTTP/1.1" 200 181 0.000461
+127.0.0.1 - - [10/Feb/2026 16:44:24] "GET /socket.io/?EIO=4&transport=polling&t=Pn9Wq5k&sid=2uzI-tBBiCbIka2FAAAA HTTP/1.1" 200 181 0.000232
+127.0.0.1 - - [10/Feb/2026 16:44:24] "GET /socket.io/?EIO=4&transport=polling&t=Pn9Wq68&sid=2uzI-tBBiCbIka2FAAAA HTTP/1.1" 200 181 0.002204
+127.0.0.1 - - [10/Feb/2026 16:44:34] "GET /api/matches/2/data HTTP/1.1" 200 2104 0.004016
+127.0.0.1 - - [10/Feb/2026 16:44:44] "GET /api/matches/2/data HTTP/1.1" 200 2242 0.003354
+ * Detected change in '/Users/sourendatta/Downloads/FRC-Flask/app.py', reloading
+DEBUG: Getting match data for 2
+DEBUG: Access found? True
+User joined room: 2
+DEBUG: Getting match data for 2
+DEBUG: Access found? True
+DEBUG: Getting match data for 2
+DEBUG: Access found? True
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 471-248-152

@@ -25,18 +25,16 @@
     </div>
 
     <div class="container">
-        <header
-            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; padding: 1rem 0;">
+        <header class="dashboard-header">
             <h2>Dashboard</h2>
-            <div>
-                <span id="user-info" style="margin-right: 1rem; color: var(--text-secondary);"></span>
-                <a href="/profile" class="btn btn-secondary"
-                    style="margin-right: 0.5rem; text-decoration: none; display: inline-block;">Profile</a>
+            <div class="user-controls">
+                <span id="user-info"></span>
+                <a href="/profile" class="btn btn-secondary">Profile</a>
                 <button id="logout-btn" class="btn btn-secondary">Logout</button>
             </div>
         </header>
 
-        <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 2rem;">
+        <div class="dashboard-grid">
 
             <!-- Matches Section -->
             <div>

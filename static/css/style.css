@@ -123,6 +123,92 @@ h3 {
     display: none !important;
 }
 
+/* Password Security UI */
+.password-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.password-wrapper input {
+    padding-right: 2.5rem;
+    margin-bottom: 0 !important;
+}
+
+.password-toggle {
+    position: absolute;
+    right: 0.5rem;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color var(--transition);
+}
+
+.password-toggle:hover {
+    color: var(--text-primary);
+}
+
+.strength-meter-container {
+    background: var(--input-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem;
+    margin-top: 0.5rem;
+    margin-bottom: 1.25rem;
+}
+
+.strength-meter {
+    height: 6px;
+    background-color: var(--card-bg);
+    border-radius: 4px;
+    margin-bottom: 0.5rem;
+    overflow: hidden;
+}
+
+.strength-bar {
+    height: 100%;
+    width: 0;
+    transition: width 0.3s ease, background-color 0.3s ease;
+}
+
+.strength-weak {
+    background-color: var(--danger);
+    width: 25%;
+}
+
+.strength-fair {
+    background-color: #f59e0b;
+    width: 50%;
+}
+
+.strength-good {
+    background-color: #3b82f6;
+    width: 75%;
+}
+
+.strength-strong {
+    background-color: var(--success);
+    width: 100%;
+}
+
+.eye-icon {
+    font-style: normal;
+}
+
+.req-item {
+    transition: color var(--transition);
+}
+
+.req-item.req-met {
+    color: var(--success);
+}
+
+
 /* Auth Pages */
 .auth-container {
     max-width: 420px;

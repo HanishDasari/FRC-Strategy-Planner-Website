@@ -144,6 +144,10 @@ def create_app(test_config=None):
             flash("All fields are required.")
             return redirect(url_for('register_page'))
 
+        if len(password) < 12 or len(password) > 128:
+            flash("Password must be between 12 and 128 characters.")
+            return redirect(url_for('register_page'))
+
         database = db.get_db()
         user = database.execute('SELECT id FROM users WHERE email = ?', (email,)).fetchone()
         
@@ -329,6 +333,10 @@ def create_app(test_config=None):
     def auth_reset_password():
         token = request.form.get('token')
         password = request.form.get('password')
+
+        if len(password) < 12 or len(password) > 128:
+            flash("Password must be between 12 and 128 characters.")
+            return redirect(url_for('reset_password_page', token=token))
 
         database = db.get_db()
         reset = database.execute(

@@ -26,6 +26,95 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
     }
+
+    // Eye icon toggle
+    const toggles = document.querySelectorAll('.password-toggle');
+    toggles.forEach(toggle => {
+        toggle.addEventListener('click', () => {
+            const input = toggle.parentElement.querySelector('input');
+            const icon = toggle.querySelector('.eye-icon');
+            if (input.type === 'password') {
+                input.type = 'text';
+                icon.textContent = '👀';
+            } else {
+                input.type = 'password';
+                icon.textContent = '👁️';
+            }
+        });
+    });
+
+    // Password strength meter
+    const strengthInputs = document.querySelectorAll('input[data-strength-meter="true"]');
+    strengthInputs.forEach(input => {
+        input.addEventListener('input', (e) => {
+            const val = e.target.value;
+            const container = e.target.closest('.form-group');
+            const bar = container.querySelector('.strength-bar');
+            const textElement = container.querySelector('#strength-text');
+            const reqLength = container.querySelector('.req-length');
+            const reqUpper = container.querySelector('.req-upper');
+            const reqNumber = container.querySelector('.req-number');
+            const reqSpecial = container.querySelector('.req-special');
+
+            if (!bar) return;
+
+            let strength = 0;
+            const hasLength = val.length >= 12;
+            const hasUpper = /[A-Z]/.test(val);
+            const hasNumber = /[0-9]/.test(val);
+            const hasSpecial = /[^A-Za-z0-9]/.test(val);
+
+            if (hasLength) strength += 1;
+            if (hasUpper) strength += 1;
+            if (hasNumber) strength += 1;
+            if (hasSpecial) strength += 1;
+
+            if (reqLength) {
+                if (hasLength) { reqLength.textContent = '✓ 12+ characters'; reqLength.classList.add('req-met'); }
+                else { reqLength.textContent = '✗ 12+ characters'; reqLength.classList.remove('req-met'); }
+            }
+            if (reqUpper) {
+                if (hasUpper) { reqUpper.textContent = '✓ 1 uppercase letter'; reqUpper.classList.add('req-met'); }
+                else { reqUpper.textContent = '✗ 1 uppercase letter'; reqUpper.classList.remove('req-met'); }
+            }
+            if (reqNumber) {
+                if (hasNumber) { reqNumber.textContent = '✓ 1 number'; reqNumber.classList.add('req-met'); }
+                else { reqNumber.textContent = '✗ 1 number'; reqNumber.classList.remove('req-met'); }
+            }
+            if (reqSpecial) {
+                if (hasSpecial) { reqSpecial.textContent = '✓ 1 special character'; reqSpecial.classList.add('req-met'); }
+                else { reqSpecial.textContent = '✗ 1 special character'; reqSpecial.classList.remove('req-met'); }
+            }
+
+            bar.className = 'strength-bar';
+
+            if (val.length === 0) {
+                bar.style.width = '5%';
+                bar.style.backgroundColor = 'var(--danger)';
+                if (textElement) { textElement.textContent = 'Strength: Weak'; textElement.style.color = 'var(--danger)'; }
+            } else if (strength === 0 || strength === 1) {
+                bar.classList.add('strength-weak');
+                bar.style.width = '';
+                bar.style.backgroundColor = '';
+                if (textElement) { textElement.textContent = 'Strength: Weak'; textElement.style.color = 'var(--danger)'; }
+            } else if (strength === 2) {
+                bar.classList.add('strength-fair');
+                bar.style.width = '';
+                bar.style.backgroundColor = '';
+                if (textElement) { textElement.textContent = 'Strength: Fair'; textElement.style.color = '#f59e0b'; }
+            } else if (strength === 3) {
+                bar.classList.add('strength-good');
+                bar.style.width = '';
+                bar.style.backgroundColor = '';
+                if (textElement) { textElement.textContent = 'Strength: Good'; textElement.style.color = '#3b82f6'; }
+            } else if (strength >= 4) {
+                bar.classList.add('strength-strong');
+                bar.style.width = '';
+                bar.style.backgroundColor = '';
+                if (textElement) { textElement.textContent = 'Strength: Strong ✓'; textElement.style.color = 'var(--success)'; }
+            }
+        });
+    });
 });
 
 async function initDashboard() {

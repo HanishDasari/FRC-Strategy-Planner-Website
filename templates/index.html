@@ -14,6 +14,11 @@
             style="text-align: center; margin-bottom: 3rem; background: var(--accent-gradient); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;">
             FRC Strategy Planner</h1>
 
+        <div class="tabs">
+            <div class="tab active">Login</div>
+            <a href="/register" class="tab" style="text-decoration: none;">Register</a>
+        </div>
+
         <div class="card">
             {% with messages = get_flashed_messages() %}
             {% if messages %}
@@ -27,7 +32,13 @@
             <div style="padding: 0.5rem;">
                 <form action="/auth/login" method="POST" style="margin-bottom: 2rem;">
                     <input type="email" name="email" placeholder="Email" required>
-                    <input type="password" name="password" placeholder="Password" required>
+                    <div class="password-wrapper">
+                        <input type="password" name="password" placeholder="Password" required minlength="12"
+                            maxlength="128">
+                        <button type="button" class="password-toggle" aria-label="Toggle password visibility">
+                            <i class="eye-icon">👁️</i>
+                        </button>
+                    </div>
                     <button type="submit" class="btn" style="width: 100%; padding: 1rem;">
                         Login
                     </button>

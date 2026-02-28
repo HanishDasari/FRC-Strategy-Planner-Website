@@ -17,6 +17,11 @@
             <p style="text-align: center; color: var(--text-secondary); margin-bottom: 2.5rem; font-size: 1.05rem;">
                 Build your team's strategy hub</p>
 
+            <div class="tabs">
+                <a href="/" class="tab" style="text-decoration: none;">Login</a>
+                <div class="tab active">Register</div>
+            </div>
+
             <div class="card">
                 <form action="/auth/register" method="POST">
                     <div class="form-group">
@@ -33,8 +38,39 @@
                     </div>
                     <div class="form-group">
                         <label
-                            style="display: block; margin-bottom: 0.5rem; color: var(--text-secondary); font-size: 0.9rem;">Password</label>
-                        <input type="password" name="password" required placeholder="••••••••">
+                            style="display: block; margin-bottom: 0.5rem; color: var(--text-secondary); font-size: 0.9rem;">Password
+                            <span
+                                style="font-size: 0.8rem; color: var(--text-secondary); font-weight: normal;">(Recommended:
+                                14-16 characters)</span></label>
+                        <div class="password-wrapper">
+                            <input type="password" name="password" required placeholder="••••••••" minlength="12"
+                                maxlength="128" data-strength-meter="true">
+                            <button type="button" class="password-toggle" aria-label="Toggle password visibility">
+                                <i class="eye-icon">👁️</i>
+                            </button>
+                        </div>
+                        <div class="strength-meter-container">
+                            <div
+                                style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.3rem; text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em;">
+                                <span>Weak</span>
+                                <span>Strong</span>
+                            </div>
+                            <div class="strength-meter">
+                                <div class="strength-bar" id="strength-bar"
+                                    style="width: 5%; background-color: var(--danger);"></div>
+                            </div>
+                            <div style="font-size: 0.85rem; margin-top: 0.5rem;">
+                                <div style="font-weight: 500; margin-bottom: 0.3rem; color: var(--danger);"
+                                    id="strength-text">Strength: Weak</div>
+                                <div
+                                    style="display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.8rem; color: var(--text-secondary);">
+                                    <div class="req-item req-length">✗ 12+ characters</div>
+                                    <div class="req-item req-upper">✗ 1 uppercase letter</div>
+                                    <div class="req-item req-number">✗ 1 number</div>
+                                    <div class="req-item req-special">✗ 1 special character</div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     <div style="display: grid; grid-template-columns: 1fr 2.5fr; gap: 1.25rem;">
                         <div class="form-group">
@@ -63,6 +99,7 @@
             </div>
         </div>
     </div>
+    <script src="/static/js/main.js"></script>
 </body>
 
 </html>

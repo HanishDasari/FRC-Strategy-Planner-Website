@@ -10,6 +10,7 @@ import uuid
 import random
 import string
 from datetime import datetime, timedelta
+import socket
 
 socketio = SocketIO()
 mail = Mail()
@@ -1043,5 +1044,23 @@ def create_app(test_config=None):
 
 
 if __name__ == '__main__':
+    def get_local_ip():
+        try:
+            # Create a dummy socket to find the primary interface IP
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
+
+    local_ip = get_local_ip()
+    print("\n" + "="*50)
+    print("FRC STRATEGY PLATFORM - NETWORK ACCESS INFO")
+    print(f"Server is running and accessible on your Wi-Fi!")
+    print(f"Teammates can join at: http://{local_ip}:5000")
+    print("="*50 + "\n")
+
     app = create_app()
-    socketio.run(app, host='127.0.0.1', port=5000, debug=True)
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True)

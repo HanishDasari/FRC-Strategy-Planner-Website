@@ -1,116 +1,72 @@
 # FRC Strategy Platform 🤖
 
-A full-stack web-based collaboration platform for FIRST Robotics Competition (FRC) teams to plan match strategies efficiently.
+A premium, collaborative web platform for FIRST Robotics Competition (FRC) teams to plan and sync match strategies in real-time.
 
-## Features
+## 🚀 Key Features
 
-### 🔐 Authentication
-- Team-based registration and login
-- Secure password hashing
-- Session management
+### 🔐 Advanced Authentication
+- **Team-based Registration**: Join as a specific team number.
+- **Email Verification**: Secure account activation and password resets via Gmail SMTP.
+- **Google Login**: Seamless integration with Google Accounts.
+- **Secure Profile Management**: Update personal info, team details, or reset passwords with a built-in strength meter and visibility toggle.
+- **Account Deletion**: Full control over your data with permanent account removal.
 
-### 📊 Dashboard
-- Create and manage matches
-- View all team matches
-- Send and receive team invites
-- Real-time invite notifications
+### 📊 Strategy Dashboard
+- **Match Management**: Create, view, and delete match plans.
+- **Collaboration Invites**: Invite other teams to your match room with real-time popup notifications.
+- **Team Status**: See who is currently active and online in your team room.
 
-### 🎯 Match Collaboration Room
-- **Strategy Planning**: Separate tabs for Autonomous, Teleop, and Endgame phases
-- **Field Drawing**: Interactive canvas with multi-color drawing tools
-- **Real-time Chat**: Team communication with timestamps
-- **Auto-sync**: All changes sync automatically across team members
+### 🎯 Real-time Match Room
+- **Multi-Phase Planning**: Specialized tabs for Autonomous, Teleop, and Endgame.
+- **Live Video/Chat**: Integrated chat system with support for image uploads and real-time messaging.
+- **Interactive Sketchboard**: High-performance HTML5 Canvas drawing with multi-user sync and undo/redo support.
+- **Socket.IO Sync**: Every stroke and message is broadcasted instantly to all connected team members.
 
-## Tech Stack
+## 🛠️ Tech Stack
 
-- **Backend**: Python (Flask)
-- **Database**: SQLite
-- **Frontend**: HTML5, CSS3, Vanilla JavaScript
-- **Canvas API**: HTML5 Canvas for field drawing
+- **Backend**: Python (Flask) with `Flask-SocketIO` for real-time events.
+- **Database**: **PostgreSQL** (Hosted on Neon.tech/AWS) for high-availability.
+- **Real-time**: WebSockets via `gevent-websocket`.
+- **Email**: `Flask-Mail` with Gmail SMTP integration.
+- **Frontend**: Modern HTML5, Vanilla CSS3 (Glassmorphism & Dark Mode), and Vanilla JavaScript.
 
-## Quick Start
+## ⚡ Quick Start
 
+1.  **Clone and Install**:
+    ```bash
+    git clone https://github.com/sdatta25/FRC-Strategy-Planner-Website.git
+    cd FRC-Flask
+    pip install -r requirements.txt
+    ```
+
+2.  **Configure Environment**:
+    Create a `.env` file from the provided `.env.example`:
+    ```bash
+    cp .env.example .env
+    # Add your DATABASE_URL, MAIL_USERNAME, and MAIL_PASSWORD
+    ```
+
+3.  **Run the App**:
+    ```bash
+    python3 app.py
+    ```
+    Open `http://localhost:5000` to start planning!
+
+## 📂 Project Architecture
+
+- `app.py`: Central logic, Socket.IO handlers, and API routes.
+- `db.py`: PostgreSQL connection management using `psycopg2`.
+- `migrate_to_pg.py`: Specialized script for SQLite -> PostgreSQL data transfers.
+- `static/js/match.js`: The "brain" of the real-time drawing sync and strategy engine.
+- `templates/`: Premium, responsive UI templates for every platform feature.
+
+## 🧪 Verification
+
+Ensure the system is running correctly by running the backend audit:
 ```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Initialize database
-flask --app app init-db
-
-# Run server
-flask --app app run
+python3 verify_backend.py
 ```
 
-Open `http://127.0.0.1:5000` in your browser.
+## 📜 License
 
-## Project Structure
-
-```
-FRC-Flask/
-├── app.py                 # Main Flask application
-├── db.py                  # Database utilities
-├── schema.sql             # Database schema
-├── requirements.txt       # Python dependencies
-├── templates/
-│   ├── index.html        # Login/Register page
-│   ├── dashboard.html    # Match dashboard
-│   └── match.html        # Collaboration room
-└── static/
-    ├── css/
-    │   └── style.css     # Dark mode styling
-    └── js/
-        ├── main.js       # Auth & dashboard logic
-        └── match.js      # Match room & canvas logic
-```
-
-## Database Schema
-
-- **teams**: Team information
-- **users**: User accounts linked to teams
-- **matches**: Match metadata
-- **match_alliances**: Team-match relationships
-- **invites**: Team invitation system
-- **messages**: Match chat messages
-- **strategies**: Phase-specific strategy text
-- **drawings**: Canvas drawing data (JSON)
-
-## API Endpoints
-
-### Authentication
-- `POST /auth/register` - Create new user/team
-- `POST /auth/login` - User login
-- `POST /auth/logout` - User logout
-- `GET /auth/me` - Get current user info
-
-### Matches
-- `GET /api/matches` - List user's matches
-- `POST /api/matches` - Create new match
-- `GET /api/matches/<id>/data` - Get match data (messages, strategies, drawings)
-
-### Collaboration
-- `POST /api/matches/<id>/messages` - Send chat message
-- `POST /api/matches/<id>/strategy` - Update strategy text
-- `POST /api/matches/<id>/drawing` - Save drawing data
-
-### Invites
-- `POST /api/invites` - Send team invite
-- `GET /api/invites/pending` - Get pending invites
-- `POST /api/invites/<id>/respond` - Accept/decline invite
-
-## Verification
-
-Run automated backend tests:
-```bash
-python verify_backend.py
-```
-
-## Design Philosophy
-
-- **Competition-ready**: Fast, simple, and reliable
-- **Dark Mode**: Professional FRC-themed interface
-- **Real-time**: 2-second polling for live updates
-- **Portable**: SQLite database for easy deployment
-
-## License
-
-MIT License - Built for FRC teams
+MIT License - Built with ❤️ for FRC teams everywhere.

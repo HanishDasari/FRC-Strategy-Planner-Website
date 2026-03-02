@@ -2,31 +2,6 @@
 let CURRENT_USER_TEAM_ID = null;
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Auth Tabs
-    const tabs = document.querySelectorAll('.tab');
-    if (tabs.length > 0) {
-        tabs.forEach(tab => {
-            tab.addEventListener('click', () => {
-                // Toggle tabs
-                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-                tab.classList.add('active');
-
-                // Toggle forms
-                const target = tab.dataset.target;
-                const loginSection = document.getElementById('login-section');
-                const registerSection = document.getElementById('register-section');
-
-                if (target === 'login') {
-                    loginSection.style.display = 'block';
-                    registerSection.style.display = 'none';
-                } else {
-                    loginSection.style.display = 'none';
-                    registerSection.style.display = 'block';
-                }
-            });
-        });
-    }
-
     // Eye icon toggle
     const toggles = document.querySelectorAll('.password-toggle');
     toggles.forEach(toggle => {
@@ -42,6 +17,48 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     });
+
+    // AJAX Login Handler
+    const loginForm = document.getElementById('login-form');
+    if (loginForm) {
+        loginForm.addEventListener('submit', async (e) => {
+            const btn = loginForm.querySelector('button[type="submit"]');
+            if (!btn) return;
+
+            // If already logging in, don't do it again
+            if (btn.innerText === 'Logging in...') return;
+
+            e.preventDefault();
+            btn.innerText = 'Logging in...';
+            btn.style.opacity = '0.7';
+            btn.disabled = true;
+
+            const formData = new FormData(loginForm);
+            try {
+                const response = await fetch(loginForm.action, {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                });
+
+                if (response.redirected) {
+                    window.location.href = response.url;
+                } else {
+                    const text = await response.text();
+                    if (text.includes('dashboard') || response.url.includes('dashboard')) {
+                        window.location.href = '/dashboard';
+                    } else {
+                        window.location.reload();
+                    }
+                }
+            } catch (err) {
+                console.error('Login Error:', err);
+                loginForm.submit();
+            }
+        });
+    }
 
     // Password strength meter
     const strengthInputs = document.querySelectorAll('input[data-strength-meter="true"]');
@@ -59,7 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!bar) return;
 
             let strength = 0;
-            const hasLength = val.length >= 12;
+            const hasLength = val.length >= 10;
             const hasUpper = /[A-Z]/.test(val);
             const hasNumber = /[0-9]/.test(val);
             const hasSpecial = /[^A-Za-z0-9]/.test(val);
@@ -70,8 +87,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (hasSpecial) strength += 1;
 
             if (reqLength) {
-                if (hasLength) { reqLength.textContent = '✓ 12+ characters'; reqLength.classList.add('req-met'); }
-                else { reqLength.textContent = '✗ 12+ characters'; reqLength.classList.remove('req-met'); }
+                if (hasLength) { reqLength.textContent = '✓ 10+ characters'; reqLength.classList.add('req-met'); }
+                else { reqLength.textContent = '✗ 10+ characters'; reqLength.classList.remove('req-met'); }
             }
             if (reqUpper) {
                 if (hasUpper) { reqUpper.textContent = '✓ 1 uppercase letter'; reqUpper.classList.add('req-met'); }
@@ -175,6 +192,15 @@ async function initDashboard() {
         loadMatches();
         loadInvites();
     });
+
+    socket.on('match_deleted', () => {
+        loadMatches();
+        loadInvites();
+    });
+
+    // Automatically refresh invites every 60 seconds.
+    // This naturally triggers the backend deletion of expired invites
+    setInterval(loadInvites, 60000);
 }
 
 function showNotification(invite) {
@@ -191,12 +217,20 @@ function showNotification(invite) {
 
     const handleResponse = async (status) => {
         try {
-            await fetch(`/api/invites/${invite.id}/respond`, {
+            const res = await fetch(`/api/invites/${invite.id}/respond`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ status: status === 'accept' ? 'Accepted' : 'Declined' })
             });
+            const result = await res.json();
+
             notification.classList.remove('show');
+
+            if (status === 'accept' && result.match_url) {
+                window.location.href = result.match_url;
+                return;
+            }
+
             loadInvites();
             loadMatches();
         } catch (e) {
@@ -253,18 +287,35 @@ async function loadMatches() {
             div.style.justifyContent = 'space-between';
             div.style.alignItems = 'center';
 
-            div.innerHTML = `
-                <div>
-                    <strong>${m.match_type} ${m.match_number}</strong>
-                    <span style="color: var(--text-secondary); font-size: 0.9em; margin-left: 0.5rem;">
-                        Created by Team ${m.creator_team_number}
-                    </span>
-                </div>
-                <div style="display: flex; gap: 0.5rem; align-items: center;">
-                    <a href="/match/${m.id}" class="btn">Open</a>
-                    <button onclick="deleteMatch(${m.id})" class="btn btn-secondary" style="background-color: var(--red-alliance); border: none; padding: 0.5rem 0.8rem;">Delete</button>
-                </div>
-            `;
+            // Left info section
+            const info = document.createElement('div');
+            info.innerHTML = `<strong>${m.match_type} ${m.match_number}</strong>
+                <span style="color: var(--text-secondary); font-size: 0.9em; margin-left: 0.5rem;">Created by Team ${m.creator_team_number}</span>`;
+
+            // Action buttons
+            const actions = document.createElement('div');
+            actions.style.display = 'flex';
+            actions.style.gap = '0.5rem';
+            actions.style.alignItems = 'center';
+
+            const openBtn = document.createElement('a');
+            openBtn.href = `/match/${m.id}`;
+            openBtn.className = 'btn';
+            openBtn.textContent = 'Open';
+
+            const delBtn = document.createElement('button');
+            delBtn.className = 'btn btn-secondary';
+            delBtn.textContent = 'Delete';
+            delBtn.style.backgroundColor = 'var(--red-alliance)';
+            delBtn.style.border = 'none';
+            delBtn.style.padding = '0.5rem 0.8rem';
+            // Use addEventListener so Chrome allows confirm() and fetch
+            delBtn.addEventListener('click', () => deleteMatch(m.id));
+
+            actions.appendChild(openBtn);
+            actions.appendChild(delBtn);
+            div.appendChild(info);
+            div.appendChild(actions);
             list.appendChild(div);
         });
     } catch (err) {
@@ -307,11 +358,18 @@ async function loadInvites() {
 
 async function respondInvite(id, status) {
     try {
-        await fetch(`/api/invites/${id}/respond`, {
+        const res = await fetch(`/api/invites/${id}/respond`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ status })
         });
+        const result = await res.json();
+
+        if (status === 'Accepted' && result.match_url) {
+            window.location.href = result.match_url;
+            return;
+        }
+
         loadInvites();
         loadMatches();
     } catch (err) {

@@ -17,7 +17,6 @@ CREATE TABLE teams (
 
 CREATE TABLE users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    google_id TEXT UNIQUE,
     email TEXT UNIQUE NOT NULL,
     password_hash TEXT,
     name TEXT,
@@ -66,6 +65,7 @@ CREATE TABLE invites (
     from_team_id INTEGER NOT NULL,
     to_team_id INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'Pending', -- 'Pending', 'Accepted', 'Declined'
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (match_id) REFERENCES matches (id),
     FOREIGN KEY (from_team_id) REFERENCES teams (id),
     FOREIGN KEY (to_team_id) REFERENCES teams (id)
@@ -75,10 +75,14 @@ CREATE TABLE messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     match_id INTEGER NOT NULL,
     sender_team_id INTEGER NOT NULL,
-    content TEXT NOT NULL,
+    sender_user_id INTEGER,
+    content TEXT,
+    message_type TEXT DEFAULT 'text', -- 'text', 'image', 'video'
+    media_url TEXT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (match_id) REFERENCES matches (id),
-    FOREIGN KEY (sender_team_id) REFERENCES teams (id)
+    FOREIGN KEY (sender_team_id) REFERENCES teams (id),
+    FOREIGN KEY (sender_user_id) REFERENCES users (id)
 );
 
 CREATE TABLE strategies (

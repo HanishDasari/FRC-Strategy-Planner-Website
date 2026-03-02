@@ -2,6 +2,23 @@
 let currentNotificationInviteId = null;
 let notificationTimeout = null;
 
+// Global function for deleting messages
+async function deleteMessage(messageId) {
+    if (!confirm('Delete this message?')) return;
+    try {
+        const res = await fetch(`/api/messages/${messageId}`, {
+            method: 'DELETE'
+        });
+        if (!res.ok) {
+            const data = await res.json();
+            alert(data.error || 'Failed to delete message');
+        }
+    } catch (err) {
+        console.error(err);
+        alert('Failed to delete message');
+    }
+}
+
 // Global function for responding to invites
 async function respondToInvite(inviteId, status) {
     try {
@@ -12,8 +29,13 @@ async function respondToInvite(inviteId, status) {
         });
 
         if (res.ok) {
-            // Re-fetch data instead of full reload if possible, but reload is safer for complex state
-            window.location.reload();
+            const result = await res.json();
+            if (status === 'Accepted' && result.match_url) {
+                // Redirect to the match room that was accepted
+                window.location.href = result.match_url;
+            } else {
+                window.location.reload();
+            }
         } else {
             const result = await res.json();
             alert(result.error || 'Failed to respond to invite');
@@ -55,8 +77,42 @@ document.addEventListener('DOMContentLoaded', () => {
 
     socket.on('connect', () => {
         console.log("Connected to match socket");
-        // Join match room AND team room (handled by server on 'join' event)
+        document.body.classList.add('connected');
+        const connBadge = document.getElementById('connection-status');
+        if (connBadge) connBadge.textContent = "Connected";
         socket.emit('join', { match_id: MATCH_ID });
+    });
+
+    socket.on('disconnect', () => {
+        console.log("Disconnected from match socket");
+        document.body.classList.remove('connected');
+        const connBadge = document.getElementById('connection-status');
+        if (connBadge) connBadge.textContent = "Disconnected";
+    });
+
+    socket.on('new_invite', (invite) => {
+        if (Number(invite.match_id) === Number(MATCH_ID)) {
+            fetchData();
+        }
+        showNotification(invite);
+    });
+
+    socket.on('refresh_data', (data) => {
+        if (Number(data.match_id) === Number(MATCH_ID)) {
+            fetchData();
+        }
+    });
+
+    socket.on('message_deleted', (data) => {
+        const msgDiv = document.querySelector(`.message[data-id="${data.id}"]`);
+        if (msgDiv) msgDiv.remove();
+    });
+
+    socket.on('match_deleted', (data) => {
+        if (Number(data.match_id) === Number(MATCH_ID)) {
+            alert("This match has been deleted by another user. You are being redirected to the dashboard.");
+            window.location.href = '/dashboard';
+        }
     });
 
     const state = {
@@ -65,12 +121,13 @@ document.addEventListener('DOMContentLoaded', () => {
         isDrawing: false,
         lastX: 0,
         lastY: 0,
+        isEraser: false,
         drawingData: { 'Autonomous': [], 'Teleop': [], 'Endgame': [] },
+        undoData: { 'Autonomous': [], 'Teleop': [], 'Endgame': [] },
         messages: [],
         strategies: {},
         teams: [],
         invites: [],
-        lastInviteCheck: null
     };
 
     // DOM Elements
@@ -87,9 +144,36 @@ document.addEventListener('DOMContentLoaded', () => {
         state.messages.push(msg);
         const div = document.createElement('div');
         div.className = 'message';
+        div.setAttribute('data-id', msg.id);
+
+        // Robust timestamp handling: 'Z' suffix on server ensures browser localizes it
+        let timestamp = new Date();
+        if (msg.timestamp) {
+            timestamp = new Date(msg.timestamp);
+        }
+
+        const timeStr = isNaN(timestamp.getTime()) ? 'Recently' : timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const sender = msg.username || msg.team_number;
+
+        let contentHtml = `<div class="message-body">${msg.content || ''}</div>`;
+        if (msg.message_type === 'image') {
+            contentHtml = `<div class="message-body"><img src="${msg.media_url}" style="max-width: 100%; border-radius: 8px; margin-top: 5px;" alt="Image"></div>`;
+        } else if (msg.message_type === 'video') {
+            contentHtml = `<div class="message-body"><video src="${msg.media_url}" controls style="max-width: 100%; border-radius: 8px; margin-top: 5px;"></video></div>`;
+        }
+
+        const isSender = msg.sender_user_id === CURRENT_USER_ID;
+        const isCreator = msg.creator_team_id === CURRENT_TEAM_ID;
+        const deleteBtn = (isSender || isCreator) ? `<button class="delete-msg-btn" onclick="deleteMessage(${msg.id})" title="Delete Message">🗑️</button>` : '';
+
         div.innerHTML = `
-            <strong>${msg.team_number} <small>${new Date(msg.timestamp).toLocaleTimeString()}</small></strong>
-            ${msg.content}
+            <div class="message-header">
+                <strong>${sender}</strong>
+                <span class="team-name">(${msg.team_name})</span>
+                ${deleteBtn}
+            </div>
+            ${contentHtml}
+            <div class="message-time">${timeStr}</div>
         `;
         chatDiv.appendChild(div);
         chatDiv.scrollTop = chatDiv.scrollHeight;
@@ -97,7 +181,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     socket.on('drawing_update', (data) => {
         if (data.phase && data.drawing_data) {
-            state.drawingData[data.phase] = JSON.parse(data.drawing_data);
+            try {
+                let parsed = JSON.parse(data.drawing_data);
+                if (!Array.isArray(parsed)) parsed = [];
+                state.drawingData[data.phase] = parsed;
+            } catch (e) {
+                state.drawingData[data.phase] = [];
+            }
             if (data.phase === state.phase) {
                 renderDrawings();
             }
@@ -113,119 +203,296 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    socket.on('new_invite', (invite) => {
-        if (invite.match_id === MATCH_ID) {
-            fetchData();
-        }
-        showNotification(invite);
-    });
 
-    socket.on('refresh_data', (data) => {
-        if (data.match_id === MATCH_ID) {
-            fetchData();
-        }
-    });
+    // --- Canvas: Two-Layer Architecture ---
+    const fieldCanvas = document.getElementById('field-canvas');
+    if (!fieldCanvas) return; // Guard
+    const pContent = fieldCanvas.parentElement;
+    if (pContent) {
+        // Force vertical scrolling only, NO sideways scrolling
+        pContent.style.display = 'block';
+        pContent.style.textAlign = 'center';
+        pContent.style.padding = '0';
+        pContent.style.overflowY = 'auto';
+        pContent.style.overflowX = 'hidden';
+        pContent.style.height = '100%';
+    }
 
-    // --- Canvas Logic ---
+    const fieldCtx = fieldCanvas.getContext('2d');
+
+    // Dynamic dimensions (Vertical Orientation)
+    let CANVAS_W = 400;
+    let CANVAS_H = 800;
+    let fieldImageLoaded = false;
+    let canvasIsReady = false;
+
+    // Create the drawing canvas and overlay it on top of the field canvas
+    const drawCanvas = document.createElement('canvas');
+    drawCanvas.id = 'drawing-canvas';
+    const drawCtx = drawCanvas.getContext('2d', { alpha: true });
+
+    // Wrapper setup — ALLOW vertical scrolling, NO sideways
+    const canvasWrapper = document.createElement('div');
+    canvasWrapper.id = 'canvas-wrapper';
+    canvasWrapper.style.cssText = 'position: relative; display: block; margin: 0 auto; line-height: 0; width: 100%; box-sizing: border-box; background: #000;';
+
+    fieldCanvas.parentElement.insertBefore(canvasWrapper, fieldCanvas);
+    canvasWrapper.appendChild(fieldCanvas);
+    canvasWrapper.appendChild(drawCanvas);
+
+    function resizeCanvases(w, h) {
+        console.log("Responsive resize triggered:", w, h);
+        CANVAS_W = w;
+        CANVAS_H = h;
+
+        fieldCanvas.width = CANVAS_W;
+        fieldCanvas.height = CANVAS_H;
+        drawCanvas.width = CANVAS_W;
+        drawCanvas.height = CANVAS_H;
+
+        // Let the wrapper width be 100% and height be determined by children
+        canvasWrapper.style.width = '100%';
+        canvasWrapper.style.height = 'auto';
+
+        // The fieldCanvas is the "anchor" (not absolute)
+        fieldCanvas.style.display = 'block';
+        fieldCanvas.style.width = '100%';
+        fieldCanvas.style.height = 'auto'; // This keeps the vertical aspect ratio
+
+        // The drawCanvas fits exactly over it
+        drawCanvas.style.cssText = `position: absolute; top: 0; left: 0; width: 100%; height: 100%; cursor: crosshair; z-index: 1000; pointer-events: all;`;
+
+        canvasIsReady = true;
+        drawFieldImage();
+        renderDrawings();
+    }
 
     const fieldImg = new Image();
     fieldImg.src = '/static/images/FRC_Field_TopView.png';
-    let fieldImageLoaded = false;
 
-    fieldImg.onload = () => {
-        canvas.width = fieldImg.naturalHeight || 800;
-        canvas.height = fieldImg.naturalWidth || 500;
-        fieldImageLoaded = true;
-        renderDrawings();
-    };
-
-    if (fieldImg.complete) {
-        fieldImg.onload();
+    function drawFieldImage() {
+        if (!fieldCtx) return;
+        fieldCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+        if (fieldImageLoaded) {
+            // VERTICAL VIEW (rotated 90deg)
+            fieldCtx.save();
+            fieldCtx.translate(0, CANVAS_H);
+            fieldCtx.rotate(-Math.PI / 2);
+            // Swapping W/H in drawImage because of rotation
+            fieldCtx.drawImage(fieldImg, 0, 0, CANVAS_H, CANVAS_W);
+            fieldCtx.restore();
+        } else {
+            fieldCtx.fillStyle = '#111';
+            fieldCtx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+        }
     }
 
-    function drawField() {
-        if (fieldImageLoaded) {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.save();
-            ctx.translate(0, canvas.height);
-            ctx.rotate(-Math.PI / 2);
-            ctx.drawImage(fieldImg, 0, 0, fieldImg.naturalWidth, fieldImg.naturalHeight);
-            ctx.restore();
-        } else {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = '#666';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.strokeStyle = '#fff';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(50, 50, canvas.width - 100, canvas.height - 100);
-        }
+    fieldImg.onload = () => {
+        console.log("Image load callback. Natural:", fieldImg.naturalWidth, fieldImg.naturalHeight);
+        fieldImageLoaded = true;
+        // Natural image is horizontal (e.g. 1000x500)
+        // For Vertical 90deg view:
+        // Canvas Width = Image Natural Height
+        // Canvas Height = Image Natural Width
+        const w = fieldImg.naturalHeight || 400;
+        const h = fieldImg.naturalWidth || 800;
+        resizeCanvases(w, h);
+    };
+
+    // Immediate fallback initialization
+    if (fieldImg.complete && fieldImg.naturalWidth > 0) {
+        fieldImg.onload();
+    } else {
+        resizeCanvases(400, 800);
     }
 
     function renderDrawings() {
-        drawField();
+        if (!drawCtx || !canvasIsReady) return;
+        drawCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+        drawCtx.globalCompositeOperation = 'source-over';
         const currentDrawings = state.drawingData[state.phase] || [];
-        ctx.save();
         for (const path of currentDrawings) {
-            if (!path || !Array.isArray(path.points) || path.points.length === 0) continue;
-            ctx.beginPath();
-            ctx.strokeStyle = path.color || 'red';
-            ctx.lineWidth = 3;
-            ctx.lineJoin = 'round';
-            ctx.lineCap = 'round';
-            const first = path.points[0];
-            ctx.moveTo(first.x, first.y);
-            for (let i = 1; i < path.points.length; i++) {
-                ctx.lineTo(path.points[i].x, path.points[i].y);
+            if (!path || !Array.isArray(path.points) || path.points.length < 2) continue;
+            drawCtx.beginPath();
+            if (path.isEraser) {
+                drawCtx.globalCompositeOperation = 'destination-out';
+                drawCtx.lineWidth = path.thickness || 20;
+            } else {
+                drawCtx.globalCompositeOperation = 'source-over';
+                drawCtx.strokeStyle = path.color || 'red';
+                drawCtx.lineWidth = path.thickness || 3;
             }
-            ctx.stroke();
+            drawCtx.lineJoin = 'round';
+            drawCtx.lineCap = 'round';
+            drawCtx.moveTo(path.points[0].x, path.points[0].y);
+            for (let i = 1; i < path.points.length; i++) {
+                drawCtx.lineTo(path.points[i].x, path.points[i].y);
+            }
+            drawCtx.stroke();
         }
-        ctx.restore();
+        drawCtx.globalCompositeOperation = 'source-over';
     }
 
-    // Interaction
-    canvas.addEventListener('mousedown', (e) => {
+    function getCoords(e) {
+        let rect = drawCanvas.getBoundingClientRect();
+
+        // Robust fallback: if browser hasn't painted yet, use raw canvas dimensions
+        if (rect.width === 0 || rect.height === 0) {
+            console.warn("Canvas rect is 0x0. Using fallback dimensions.");
+            // Force a resize calculation in the background
+            resizeCanvases(CANVAS_W, CANVAS_H);
+            // Re-fetch rect after forced layout
+            rect = drawCanvas.getBoundingClientRect();
+            // If still zero, mock a rect based on internal width/height to allow drawing anyway
+            if (rect.width === 0) {
+                rect = { left: 0, top: 0, width: CANVAS_W, height: CANVAS_H };
+            }
+        }
+
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+        const scaleX = CANVAS_W / rect.width;
+        const scaleY = CANVAS_H / rect.height;
+        return {
+            x: (clientX - rect.left) * scaleX,
+            y: (clientY - rect.top) * scaleY
+        };
+    }
+
+    function startDrawing(e) {
+        const coords = getCoords(e);
+
+        console.log("Drawing start at:", coords.x, coords.y);
         state.isDrawing = true;
-        const rect = canvas.getBoundingClientRect();
-        state.lastX = e.clientX - rect.left;
-        state.lastY = e.clientY - rect.top;
-        if (!Array.isArray(state.drawingData[state.phase])) state.drawingData[state.phase] = [];
+        state.lastX = coords.x;
+        state.lastY = coords.y;
+
+        const baseThickness = parseInt(document.getElementById('thickness-slider')?.value || 3);
+
+        // Ensure phase exists to prevent push errors
+        if (!state.drawingData[state.phase]) state.drawingData[state.phase] = [];
+        if (!state.undoData[state.phase]) state.undoData[state.phase] = [];
+
+        // Clear redo stack on new drawing
+        state.undoData[state.phase] = [];
+
         state.drawingData[state.phase].push({
             color: state.color,
+            isEraser: state.isEraser,
+            thickness: state.isEraser ? baseThickness * 3 : baseThickness,
             points: [{ x: state.lastX, y: state.lastY }]
+        });
+        if (e.cancelable) e.preventDefault();
+    }
+
+    function moveDrawing(e) {
+        if (!state.isDrawing) return;
+        const coords = getCoords(e);
+
+        const currentPhaseDrawings = state.drawingData[state.phase];
+        if (!currentPhaseDrawings || currentPhaseDrawings.length === 0) return;
+        const currentPath = currentPhaseDrawings[currentPhaseDrawings.length - 1];
+        if (!currentPath) return;
+
+        currentPath.points.push({ x: coords.x, y: coords.y });
+        renderDrawings();
+        if (e.cancelable) e.preventDefault();
+    }
+
+    function stopDrawing() {
+        if (state.isDrawing) {
+            console.log("Drawing stop. Saving...");
+            state.isDrawing = false;
+            saveDrawing();
+        }
+    }
+
+    // Interaction Listeners (Z-INDEX 9999)
+    drawCanvas.addEventListener('mousedown', startDrawing, true);
+    drawCanvas.addEventListener('mousemove', moveDrawing, true);
+    drawCanvas.addEventListener('mouseup', stopDrawing, true);
+    drawCanvas.addEventListener('mouseout', stopDrawing, true);
+
+    // Touch Support for mobile/tablets
+    drawCanvas.addEventListener('touchstart', startDrawing, { passive: false });
+    drawCanvas.addEventListener('touchmove', moveDrawing, { passive: false });
+    drawCanvas.addEventListener('touchend', stopDrawing);
+
+    // Keyboard Hotkeys for Undo / Redo
+    document.addEventListener('keydown', (e) => {
+        // Prevent hotkeys from triggering if user is typing in chat or strategy box
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+        if (e.ctrlKey || e.metaKey) {
+            const currentPhaseDrawings = state.drawingData[state.phase];
+            const currentPhaseUndo = state.undoData[state.phase];
+
+            if (e.key === 'z' && !e.shiftKey) {
+                // Undo
+                e.preventDefault();
+                if (currentPhaseDrawings.length > 0) {
+                    const lastDrawing = currentPhaseDrawings.pop();
+                    currentPhaseUndo.push(lastDrawing);
+                    renderDrawings();
+                    saveDrawing();
+                    console.log("Undo triggered.");
+                }
+            } else if ((e.key === 'z' && e.shiftKey) || e.key === 'y') {
+                // Redo (Ctrl+Y or Ctrl+Shift+Z)
+                e.preventDefault();
+                if (currentPhaseUndo.length > 0) {
+                    const redoDrawing = currentPhaseUndo.pop();
+                    currentPhaseDrawings.push(redoDrawing);
+                    renderDrawings();
+                    saveDrawing();
+                    console.log("Redo triggered.");
+                }
+            }
+        }
+    });
+
+    // Tool Listeners
+    const clearBtn = document.getElementById('clear-drawing-btn');
+    if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+            if (!confirm('Clear all drawings for this phase?')) return;
+            state.drawingData[state.phase] = [];
+            state.undoData[state.phase] = []; // also clear redo history
+            renderDrawings();
+            saveDrawing();
+        });
+    }
+
+    const colorBtns = document.querySelectorAll('.color-btn:not(#eraser-btn)');
+    colorBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.color-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            state.color = btn.dataset.color || 'white';
+            state.isEraser = false;
+            console.log("Active Color:", state.color);
         });
     });
 
-    canvas.addEventListener('mousemove', (e) => {
-        if (!state.isDrawing) return;
-        const rect = canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-        const currentPhaseDrawings = state.drawingData[state.phase];
-        const currentPath = currentPhaseDrawings[currentPhaseDrawings.length - 1];
-        currentPath.points.push({ x, y });
-        renderDrawings();
-        state.lastX = x;
-        state.lastY = y;
-    });
-
-    canvas.addEventListener('mouseup', () => { if (state.isDrawing) { state.isDrawing = false; saveDrawing(); } });
-    canvas.addEventListener('mouseout', () => { if (state.isDrawing) { state.isDrawing = false; saveDrawing(); } });
-
-    // Buttons
-    const clearBtn = document.getElementById('clear-drawing-btn');
-    if (clearBtn) clearBtn.onclick = () => {
-        state.drawingData[state.phase] = [];
-        renderDrawings();
-        saveDrawing();
-    };
-
-    document.querySelectorAll('.color-btn').forEach(btn => {
-        btn.onclick = () => {
+    const eraserBtn = document.getElementById('eraser-btn');
+    if (eraserBtn) {
+        eraserBtn.addEventListener('click', () => {
             document.querySelectorAll('.color-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            state.color = btn.dataset.color;
-        };
-    });
+            eraserBtn.classList.add('active');
+            state.isEraser = true;
+            console.log("Eraser Active");
+        });
+    }
+
+    const thicknessSlider = document.getElementById('thickness-slider');
+    const thicknessVal = document.getElementById('thickness-val');
+    if (thicknessSlider) {
+        thicknessSlider.addEventListener('input', (e) => {
+            const val = e.target.value;
+            if (thicknessVal) thicknessVal.textContent = val + 'px';
+        });
+    }
 
     // API
     async function fetchData() {
@@ -244,28 +511,93 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateUI(data) {
-        if (data.messages) {
-            state.messages = data.messages;
-            chatDiv.innerHTML = '';
-            state.messages.forEach(msg => {
-                const div = document.createElement('div');
-                div.className = 'message';
-                div.innerHTML = `<strong>${msg.team_number} <small>${new Date(msg.timestamp).toLocaleTimeString()}</small></strong> ${msg.content}`;
-                chatDiv.appendChild(div);
-            });
-            chatDiv.scrollTop = chatDiv.scrollHeight;
-        }
-        state.strategies = data.strategies || {};
-        if (strategyText && document.activeElement !== strategyText) strategyText.value = state.strategies[state.phase] || '';
+        // --- Teams & Invites: always render first, independently of canvas ---
+        try {
+            if (data.teams) { state.teams = data.teams; renderTeams(); }
+        } catch (e) { console.error('renderTeams error:', e); }
 
-        if (data.drawings) {
-            for (const [phase, json] of Object.entries(data.drawings)) {
-                try { state.drawingData[phase] = JSON.parse(json) || []; } catch (e) { state.drawingData[phase] = []; }
+        try {
+            if (data.invites) { state.invites = data.invites; renderInvites(); }
+        } catch (e) { console.error('renderInvites error:', e); }
+
+        // --- Chat Messages ---
+        try {
+            if (data.messages) {
+                state.messages = data.messages;
+                chatDiv.innerHTML = '';
+                state.messages.forEach(msg => {
+                    const div = document.createElement('div');
+                    div.className = 'message';
+                    div.setAttribute('data-id', msg.id);
+
+                    let timestamp = msg.timestamp ? new Date(msg.timestamp) : new Date();
+                    const timeStr = isNaN(timestamp.getTime()) ? 'Recently' : timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    const sender = msg.username || msg.team_number;
+
+                    let contentHtml = `<div class="message-body">${msg.content || ''}</div>`;
+                    if (msg.message_type === 'image') {
+                        contentHtml = `<div class="message-body"><img src="${msg.media_url}" style="max-width: 100%; border-radius: 8px;" alt="Image"></div>`;
+                    } else if (msg.message_type === 'video') {
+                        contentHtml = `<div class="message-body"><video src="${msg.media_url}" controls style="max-width: 100%; border-radius: 8px;"></video></div>`;
+                    }
+
+                    const isSender = msg.sender_user_id === CURRENT_USER_ID;
+                    const isCreator = msg.creator_team_id === CURRENT_TEAM_ID;
+                    // Use addEventListener on delete button (inline onclick blocked by Chrome CSP)
+                    const msgDiv = div;
+                    div.innerHTML = `<div class="message-header"><strong>${sender}</strong> <span>(${msg.team_name})</span></div>${contentHtml}<div class="message-time">${timeStr}</div>`;
+                    if (isSender || isCreator) {
+                        const delBtn = document.createElement('button');
+                        delBtn.className = 'delete-msg-btn';
+                        delBtn.textContent = '🗑️';
+                        delBtn.addEventListener('click', () => deleteMessage(msg.id));
+                        msgDiv.querySelector('.message-header').appendChild(delBtn);
+                    }
+                    chatDiv.appendChild(div);
+                });
+                chatDiv.scrollTop = chatDiv.scrollHeight;
             }
-            renderDrawings();
-        }
-        if (data.teams) { state.teams = data.teams; renderTeams(); }
-        if (data.invites) { state.invites = data.invites; renderInvites(); }
+        } catch (e) { console.error('chat render error:', e); }
+
+        // --- Strategy ---
+        try {
+            if (data.strategies) state.strategies = data.strategies;
+            if (strategyText && document.activeElement !== strategyText) strategyText.value = state.strategies[state.phase] || '';
+        } catch (e) { console.error('strategy render error:', e); }
+
+        // --- Drawings: isolated so canvas errors never block above sections ---
+        try {
+            if (data.drawings) {
+                // Initialize default arrays first for safety
+                ['Autonomous', 'Teleop', 'Endgame'].forEach(phase => {
+                    if (!state.drawingData[phase]) {
+                        state.drawingData[phase] = [];
+                    }
+                });
+
+                for (const [phase, json] of Object.entries(data.drawings)) {
+                    if (json) {
+                        try {
+                            let parsed = JSON.parse(json);
+                            if (!Array.isArray(parsed)) parsed = [];
+                            state.drawingData[phase] = parsed;
+                        } catch (e) {
+                            state.drawingData[phase] = [];
+                        }
+                    } else {
+                        state.drawingData[phase] = [];
+                    }
+                }
+                renderDrawings();
+            } else {
+                // If data.drawings is missing entirely, ensure initialization
+                ['Autonomous', 'Teleop', 'Endgame'].forEach(phase => {
+                    if (!state.drawingData[phase]) {
+                        state.drawingData[phase] = [];
+                    }
+                });
+            }
+        } catch (e) { console.error('renderDrawings error:', e); }
     }
 
     function renderTeams() {
@@ -274,10 +606,23 @@ document.addEventListener('DOMContentLoaded', () => {
         state.teams.forEach(team => {
             const div = document.createElement('div');
             div.className = 'team-item';
-            const activeStatus = team.is_active ?
-                '<span style="height: 8px; width: 8px; background-color: #4ade80; border-radius: 50%; display: inline-block; margin-left: 5px;"></span>' :
-                '<span style="height: 8px; width: 8px; background-color: #666; border-radius: 50%; display: inline-block; margin-left: 5px;"></span>';
-            div.innerHTML = `<div><strong>${team.team_number}</strong> ${activeStatus}</div>`;
+
+            const isActive = !!team.is_active;
+            const dotColor = isActive ? '#4ade80' : '#666';
+            const statusDot = `<span style="height: 10px; width: 10px; background-color: ${dotColor}; border-radius: 50%; display: inline-block; margin-right: 10px;"></span>`;
+
+            div.style.padding = '0.75rem 1rem';
+            div.style.display = 'flex';
+            div.style.alignItems = 'center';
+            div.style.borderBottom = '1px solid var(--border)';
+
+            div.innerHTML = `
+                ${statusDot}
+                <div style="flex-grow: 1;">
+                    <div style="font-weight: 700; color: var(--text-primary); font-size: 0.95rem;">Team ${team.team_number}</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">${team.team_name}</div>
+                </div>
+            `;
             teamsListDiv.appendChild(div);
         });
     }
@@ -285,26 +630,90 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderInvites() {
         if (!invitesListDiv) return;
         invitesListDiv.innerHTML = '';
-        state.invites.filter(i => i.status === 'Pending').forEach(invite => {
+
+        const pendingInvites = state.invites.filter(i => i.status === 'Pending');
+
+        if (pendingInvites.length === 0) {
+            invitesListDiv.innerHTML = '<div style="color: var(--text-secondary); font-size: 0.8rem; text-align: center; padding: 1rem;">No pending invites</div>';
+            return;
+        }
+
+        pendingInvites.forEach(invite => {
             const div = document.createElement('div');
             div.className = 'invite-item';
-            const isReceived = invite.to_team_number === CURRENT_TEAM_NUMBER;
+            div.style.padding = '0.6rem 0.75rem';
+            div.style.backgroundColor = 'rgba(255,255,255,0.03)';
+            div.style.borderRadius = '8px';
+            div.style.marginBottom = '0.5rem';
+            div.style.fontSize = '0.8rem';
+            div.style.border = '1px solid rgba(255,255,255,0.05)';
+
+            const isReceived = Number(invite.to_team_number) === Number(CURRENT_TEAM_NUMBER);
+            const isSent = Number(invite.from_team_number) === Number(CURRENT_TEAM_NUMBER);
+
             div.innerHTML = `
-                <div><strong>Team ${invite.from_team_number}</strong> → <strong>Team ${invite.to_team_number}</strong></div>
+                <div style="margin-bottom: 0.4rem;">
+                    <strong>Team ${invite.from_team_number}</strong> → <strong>Team ${invite.to_team_number}</strong>
+                </div>
                 ${isReceived ? `
-                    <div class="invite-actions">
-                        <button onclick="respondToInvite(${invite.id}, 'Accepted')" class="btn">Accept</button>
-                        <button onclick="respondToInvite(${invite.id}, 'Declined')" class="btn btn-secondary">Decline</button>
+                    <div class="invite-actions" style="display: flex; gap: 0.4rem;">
+                        <button onclick="respondToInvite(${invite.id}, 'Accepted')" class="btn" style="padding: 0.3rem 0.6rem; font-size: 0.7rem;">Accept</button>
+                        <button onclick="respondToInvite(${invite.id}, 'Declined')" class="btn btn-secondary" style="padding: 0.3rem 0.6rem; font-size: 0.7rem;">Decline</button>
                     </div>
-                ` : '<div style="color: var(--text-secondary);">Pending...</div>'}
+                ` : `
+                    <div style="display: flex; align-items: center; gap: 5px; color: var(--accent); font-weight: 600; font-size: 0.7rem;">
+                        <span class="pulse" style="width: 6px; height: 6px; background: var(--accent); border-radius: 50%;"></span>
+                        Pending...
+                    </div>
+                `}
             `;
             invitesListDiv.appendChild(div);
         });
+        invitesListDiv.scrollTop = invitesListDiv.scrollHeight;
     }
 
-    function saveStrategy() {
-        if (!strategyText) return;
-        socket.emit('update_strategy', { match_id: MATCH_ID, phase: state.phase, text_content: strategyText.value });
+    let strategyTimeout = null;
+    function saveStrategy(isManual = false) {
+        if (!strategyText || !saveStrategyBtn) return;
+
+        if (isManual) {
+            saveStrategyBtn.textContent = 'Saving...';
+            saveStrategyBtn.classList.add('btn-loading');
+        }
+
+        socket.emit('update_strategy', {
+            match_id: MATCH_ID,
+            phase: state.phase,
+            text_content: strategyText.value
+        });
+
+        if (isManual) {
+            setTimeout(() => {
+                saveStrategyBtn.textContent = 'Saved!';
+                saveStrategyBtn.style.background = '#3fb950';
+                setTimeout(() => {
+                    saveStrategyBtn.textContent = 'Save Plan';
+                    saveStrategyBtn.style.background = '';
+                    saveStrategyBtn.classList.remove('btn-loading');
+                }, 2000);
+            }, 500);
+        }
+    }
+
+    if (strategyText) {
+        strategyText.oninput = () => {
+            clearTimeout(strategyTimeout);
+            strategyTimeout = setTimeout(() => saveStrategy(false), 1000);
+        };
+        strategyText.onblur = () => saveStrategy(true);
+    }
+
+    const saveStrategyBtn = document.getElementById('save-strategy-btn');
+    if (saveStrategyBtn) {
+        saveStrategyBtn.onclick = () => {
+            clearTimeout(strategyTimeout);
+            saveStrategy(true);
+        };
     }
 
     function saveDrawing() {
@@ -312,23 +721,108 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const chatForm = document.getElementById('chat-form');
-    if (chatForm) {
-        chatForm.onsubmit = (e) => {
-            e.preventDefault();
-            const input = e.target.elements['content'];
-            if (!input.value) return;
-            socket.emit('chat_message', { match_id: MATCH_ID, content: input.value, timestamp: new Date().toISOString() });
-            input.value = '';
+    const mediaInput = document.getElementById('media-input');
+    const attachBtn = document.getElementById('attach-btn');
+    const mediaPreviewContainer = document.getElementById('media-preview-container');
+    const mediaPreviewContent = document.getElementById('media-preview-content');
+    const cancelMediaBtn = document.getElementById('cancel-media-btn');
+
+    let stagedFile = null;
+
+    if (attachBtn && mediaInput) {
+        attachBtn.onclick = () => mediaInput.click();
+        mediaInput.onchange = () => {
+            if (!mediaInput.files || !mediaInput.files.length) return;
+            stagedFile = mediaInput.files[0];
+
+            // Show preview
+            mediaPreviewContainer.style.display = 'block';
+            mediaPreviewContent.innerHTML = '';
+
+            if (stagedFile.type.startsWith('image/')) {
+                const img = document.createElement('img');
+                img.src = URL.createObjectURL(stagedFile);
+                img.style.maxWidth = '100px';
+                img.style.maxHeight = '100px';
+                img.style.borderRadius = '4px';
+                mediaPreviewContent.appendChild(img);
+            } else {
+                mediaPreviewContent.innerHTML = `<div style="font-size: 0.7rem; color: var(--text-secondary); background: rgba(255,255,255,0.05); padding: 5px; border-radius: 4px;">${stagedFile.name}</div>`;
+            }
         };
     }
 
-    const saveStrategyBtn = document.getElementById('save-strategy-btn');
-    if (saveStrategyBtn) saveStrategyBtn.onclick = saveStrategy;
-    if (strategyText) strategyText.onblur = saveStrategy;
+    if (cancelMediaBtn) {
+        cancelMediaBtn.onclick = () => {
+            stagedFile = null;
+            mediaInput.value = '';
+            mediaPreviewContainer.style.display = 'none';
+            mediaPreviewContent.innerHTML = '';
+        };
+    }
 
-    document.querySelectorAll('.tab').forEach(tab => {
+    if (chatForm) {
+        chatForm.onsubmit = async (e) => {
+            e.preventDefault();
+            const input = e.target.elements['content'];
+            if (!input.value && !stagedFile) return;
+
+            const sendBtn = e.target.querySelector('button[type="submit"]');
+            const originalBtnText = sendBtn.textContent;
+
+            let messagePayload = {
+                match_id: MATCH_ID,
+                content: input.value,
+                message_type: 'text',
+                timestamp: new Date().toISOString()
+            };
+
+            if (stagedFile) {
+                sendBtn.textContent = '...';
+                sendBtn.disabled = true;
+
+                const formData = new FormData();
+                formData.append('file', stagedFile);
+
+                try {
+                    const res = await fetch('/api/upload', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!res.ok) throw new Error(`Upload failed with status: ${res.status}`);
+
+                    const data = await res.json();
+                    if (data.url) {
+                        messagePayload.message_type = data.type;
+                        messagePayload.media_url = data.url;
+                    } else {
+                        throw new Error('No URL in response');
+                    }
+                } catch (err) {
+                    console.error("Upload failed:", err);
+                    alert("Failed to upload media. Please try again.");
+                    sendBtn.textContent = originalBtnText;
+                    sendBtn.disabled = false;
+                    return;
+                } finally {
+                    sendBtn.textContent = originalBtnText;
+                    sendBtn.disabled = false;
+                }
+            }
+
+            socket.emit('chat_message', messagePayload);
+            input.value = '';
+            stagedFile = null;
+            mediaInput.value = '';
+            mediaPreviewContainer.style.display = 'none';
+            mediaPreviewContent.innerHTML = '';
+        };
+    }
+
+    document.querySelectorAll('.phase-tab').forEach(tab => {
         tab.onclick = () => {
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.phase-tab').forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
             state.phase = tab.dataset.phase;
             if (strategyText) strategyText.value = state.strategies[state.phase] || '';

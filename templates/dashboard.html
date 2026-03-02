@@ -26,7 +26,10 @@
 
     <div class="container">
         <header class="dashboard-header">
-            <h2>Dashboard</h2>
+            <div style="display: flex; align-items: center; gap: 1rem;">
+                <img src="/static/images/shark_logo.png" alt="Logo" class="logo">
+                <h2 style="margin: 0;">Dashboard</h2>
+            </div>
             <div class="user-controls">
                 <span id="user-info"></span>
                 <a href="/profile" class="btn btn-secondary">Profile</a>
@@ -50,7 +53,6 @@
                             <select name="match_type" style="margin-bottom: 0;">
                                 <option value="Qualification">Qualification</option>
                                 <option value="Elimination">Elimination</option>
-                                <option value="Practice">Practice</option>
                             </select>
                         </div>
                         <button type="submit" class="btn">Create</button>

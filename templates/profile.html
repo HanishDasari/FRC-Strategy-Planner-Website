@@ -60,7 +60,12 @@
                         <label
                             style="display: block; margin-bottom: 0.5rem; color: var(--text-secondary); font-size: 0.9rem;">New
                             Password (leave blank to keep current)</label>
-                        <input type="password" name="password" placeholder="••••••••">
+                        <div class="password-wrapper">
+                            <input type="password" name="password" placeholder="••••••••" maxlength="128">
+                            <button type="button" class="password-toggle" aria-label="Toggle password visibility">
+                                <i class="eye-icon">👁️</i>
+                            </button>
+                        </div>
                     </div>
 
                     <div style="display: flex; gap: 1rem; margin-top: 2.5rem;">
@@ -77,6 +82,7 @@
         </div>
     </div>
 
+    <script src="/static/js/main.js"></script>
     <script>
         function confirmDelete() {
             if (confirm("Are you sure you want to delete your account? This action is permanent and cannot be undone.")) {

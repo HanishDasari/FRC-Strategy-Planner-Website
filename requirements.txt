@@ -1,6 +1,7 @@
 Flask==3.0.0
 pytest==8.0.0
-authlib
 requests
 flask-socketio
 Flask-Mail
+python-dotenv
+psycopg2-binary

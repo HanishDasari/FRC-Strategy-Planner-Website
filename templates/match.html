@@ -10,10 +10,10 @@
     <style>
         .match-container {
             display: grid;
-            grid-template-columns: 280px 1.5fr 300px 320px;
-            gap: 1.25rem;
+            grid-template-columns: 220px 1fr 220px 260px;
+            gap: 1rem;
             height: calc(100vh - 100px);
-            padding: 1.25rem;
+            padding: 1rem;
             box-sizing: border-box;
         }
 
@@ -90,17 +90,20 @@
         </div>
     </div>
 
-    <header class="dashboard-header" style="height: 60px; padding: 0 2rem; margin-bottom: 0; box-sizing: border-box;">
-        <div style="display: flex; align-items: center; gap: 1.5rem;">
+    <header class="dashboard-header"
+        style="padding: 1rem 1.5rem; margin-bottom: 0; box-sizing: border-box; position: relative;">
+        <div style="display: flex; align-items: center; gap: 1rem;">
             <a href="/dashboard" class="btn btn-secondary" style="padding: 0.4rem 0.8rem;">&larr;</a>
-            <h2 style="margin: 0; font-size: 1.25rem;">Match Strategy</h2>
+            <img src="/static/images/shark_logo.png" alt="Logo" class="logo">
+            <h2 style="margin: 0; font-size: 1.1rem; white-space: nowrap;">Match Strategy</h2>
         </div>
-        <div class="phase-tabs" style="margin-bottom: 0; width: 450px;">
+        <div class="phase-tabs" style="margin-bottom: 0; max-width: 350px; flex-grow: 1;">
             <div class="phase-tab active" data-phase="Autonomous">Auto</div>
             <div class="phase-tab" data-phase="Teleop">Teleop</div>
-            <div class="phase-tab" data-phase="Endgame">Endgame</div>
         </div>
-        <div id="connection-status" style="font-size: 0.85rem; font-weight: 600; color: var(--success);">Connected</div>
+        <div style="flex-grow: 0; display: flex; justify-content: flex-end;">
+            <div id="connection-status" class="connection-status-badge">Connecting...</div>
+        </div>
     </header>
 
     <div class="match-container">
@@ -126,12 +129,37 @@
             <div class="panel-content" style="display: flex; align-items: center; justify-content: center;">
                 <canvas id="field-canvas" width="600" height="300"></canvas>
             </div>
-            <div class="color-picker" style="background: rgba(0,0,0,0.2); border-top: 1px solid var(--border);">
-                <div class="color-btn active" style="background: var(--red-alliance);" data-color="red"></div>
-                <div class="color-btn" style="background: var(--blue-alliance);" data-color="blue"></div>
-                <div class="color-btn" style="background: #3fb950;" data-color="green"></div>
-                <div class="color-btn" style="background: #d29922;" data-color="yellow"></div>
-                <div class="color-btn" style="background: #f0f6fc;" data-color="white"></div>
+            <div class="color-picker"
+                style="padding: 12px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; align-items: center; background: rgba(0,0,0,0.2); border-top: 1px solid var(--border);">
+                <!-- Colors -->
+                <div class="color-btn active" style="background: var(--red-alliance);" data-color="red" title="Red">
+                </div>
+                <div class="color-btn" style="background: var(--blue-alliance);" data-color="blue" title="Blue"></div>
+                <div class="color-btn" style="background: #3fb950;" data-color="green" title="Green"></div>
+                <div class="color-btn" style="background: #d29922;" data-color="yellow" title="Yellow"></div>
+                <div class="color-btn" style="background: #ff79c6;" data-color="#ff79c6" title="Pink"></div>
+                <div class="color-btn" style="background: #8be9fd;" data-color="#8be9fd" title="Cyan"></div>
+                <div class="color-btn" style="background: #f0f6fc;" data-color="white" title="White"></div>
+
+                <div style="width: 1px; height: 24px; background: var(--border); margin: 0 4px;"></div>
+
+                <!-- Eraser -->
+                <button id="eraser-btn" class="color-btn"
+                    style="background: #30363d; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border); font-size: 0.7rem; font-weight: 700; color: var(--text-secondary);"
+                    title="Eraser">
+                    ERASE
+                </button>
+
+                <div style="width: 1px; height: 24px; background: var(--border); margin: 0 4px;"></div>
+
+                <!-- Thickness Control -->
+                <div style="display: flex; align-items: center; gap: 8px; margin-left: 4px;">
+                    <span style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">SIZE</span>
+                    <input type="range" id="thickness-slider" min="1" max="50" value="3"
+                        style="width: 80px; margin-bottom: 0; cursor: pointer;">
+                    <span id="thickness-val"
+                        style="font-size: 0.75rem; color: var(--accent); font-weight: 700; min-width: 20px;">3px</span>
+                </div>
             </div>
         </div>
 
@@ -139,7 +167,7 @@
         <div class="panel">
             <div class="panel-header">Alliances</div>
             <div class="panel-content" style="padding: 0; display: flex; flex-direction: column;">
-                <div id="active-teams-list" style="flex-grow: 1; border: none; border-radius: 0; margin-top: 0;"></div>
+                <div id="active-teams-list" style="flex-grow: 1; overflow-y: auto;"></div>
 
                 <div style="border-top: 1px solid var(--border); padding: 1.25rem; background: rgba(255,255,255,0.01);">
                     <strong
@@ -152,20 +180,40 @@
                     </form>
                 </div>
 
-                <div style="border-top: 1px solid var(--border); padding: 1rem; background: rgba(0,0,0,0.1);">
+                <div
+                    style="border-top: 1px solid var(--border); padding: 1.25rem; background: rgba(0,0,0,0.15); max-height: 200px; display: flex; flex-direction: column;">
                     <strong
                         style="font-size: 0.8em; color: var(--text-secondary); text-transform: uppercase; display: block; margin-bottom: 0.75rem;">Invites</strong>
-                    <div id="match-invites-list" style="border: none; margin-top: 0;"></div>
+                    <div id="match-invites-list" style="overflow-y: auto; flex-grow: 1; min-height: 50px;"></div>
                 </div>
             </div>
         </div>
 
         <!-- Chat -->
-        <div class="panel">
+        <div class="panel" style="display: flex; flex-direction: column;">
             <div class="panel-header">Communication</div>
-            <div id="chat-messages" style="background: rgba(0,0,0,0.05);"></div>
+            <div id="chat-messages"
+                style="flex-grow: 1; overflow-y: auto; background: rgba(0,0,0,0.05); padding: 0.75rem;"></div>
+
+            <!-- Media Preview Area -->
+            <div id="media-preview-container"
+                style="display: none; padding: 0.5rem 1rem; border-top: 1px solid var(--border); background: rgba(255,255,255,0.02); position: relative;">
+                <div id="media-preview-content" style="max-width: 100px; position: relative;">
+                    <!-- Preview will be injected here -->
+                </div>
+                <button type="button" id="cancel-media-btn"
+                    style="position: absolute; top: 5px; left: 110px; background: #f87171; color: white; border: none; border-radius: 50%; width: 20px; height: 20px; cursor: pointer; font-size: 12px; line-height: 20px; text-align: center; padding: 0;">
+                    ×
+                </button>
+            </div>
+
             <div style="padding: 1rem; border-top: 1px solid var(--border); background: rgba(255,255,255,0.01);">
-                <form id="chat-form" style="display: flex; gap: 0.5rem;">
+                <form id="chat-form" style="display: flex; gap: 0.5rem; align-items: center;">
+                    <input type="file" id="media-input" style="display: none;" accept="image/*,video/*">
+                    <button type="button" class="btn" id="attach-btn"
+                        style="padding: 0.6rem; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--border);">
+                        📎
+                    </button>
                     <input type="text" name="content" placeholder="Send a message..."
                         style="margin-bottom: 0; flex-grow: 1;" autocomplete="off">
                     <button type="submit" class="btn" style="padding: 0.6rem 1rem;">Send</button>
@@ -176,10 +224,10 @@
 
     <!-- Match ID passed from Flask -->
     <script>
-        const MATCH_ID = {{ match_id }};
-        const CURRENT_TEAM_NUMBER = {{ current_team_number }};
-        const CURRENT_USER_ID = {{ current_user_id }};
-        const CURRENT_TEAM_ID = {{ current_team_id }};
+        const MATCH_ID = {{ match_id | default (0) }};
+        const CURRENT_TEAM_NUMBER = {{ current_team_number | default (0) }};
+        const CURRENT_USER_ID = {{ current_user_id | default (0) }};
+        const CURRENT_TEAM_ID = {{ current_team_id | default (0) }};
     </script>
     <script src="/static/js/match.js"></script>
 </body>

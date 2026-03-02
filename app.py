@@ -1,7 +1,8 @@
 import os
 import functools
+from dotenv import load_dotenv
+load_dotenv(override=True)
 from flask import Flask, render_template, request, redirect, url_for, flash, session, g, jsonify, current_app
-from authlib.integrations.flask_client import OAuth
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_mail import Mail, Message
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -23,11 +24,20 @@ def create_app(test_config=None):
     app = Flask(__name__, instance_relative_config=True)
     app.config.from_mapping(
         SECRET_KEY='dev',
-        DATABASE=os.path.join(app.root_path, 'frc_strategy.sqlite'),
-        GOOGLE_CLIENT_ID=os.environ.get('GOOGLE_CLIENT_ID'),
-        GOOGLE_CLIENT_SECRET=os.environ.get('GOOGLE_CLIENT_SECRET'),
+        DATABASE_URL=os.environ.get('DATABASE_URL'),
+        UPLOAD_FOLDER=os.path.join(app.root_path, 'static', 'uploads'),
+        MAX_CONTENT_LENGTH=16 * 1024 * 1024, # 16MB limit
+        MAIL_SERVER='smtp.gmail.com',
+        MAIL_PORT=587,
+        MAIL_USE_TLS=True,
+        MAIL_USERNAME=os.environ.get('MAIL_USERNAME'),
+        MAIL_PASSWORD=os.environ.get('MAIL_PASSWORD'),
+        MAIL_DEFAULT_SENDER=os.environ.get('MAIL_USERNAME'),
+        SESSION_COOKIE_SAMESITE='Lax',
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SECURE=False, # Required for HTTP
     )
-
+    
     if test_config is None:
         # load the instance config, if it exists, when not testing
         app.config.from_pyfile('config.py', silent=True)
@@ -35,21 +45,11 @@ def create_app(test_config=None):
         # load the test config if passed in
         app.config.from_mapping(test_config)
 
-    if not app.config['GOOGLE_CLIENT_ID'] or not app.config['GOOGLE_CLIENT_SECRET']:
-        print("WARNING: GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET not set. Google Login will fail.")
 
-    oauth = OAuth(app)
-    oauth.register(
-        name='google',
-        server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
-        client_kwargs={
-            'scope': 'openid email profile'
-        }
-    )
-
-    # ensure the instance folder exists
+    # ensure the instance and upload folders exist
     try:
         os.makedirs(app.instance_path)
+        os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
     except OSError:
         pass
 
@@ -67,9 +67,10 @@ def create_app(test_config=None):
 
     def get_db_for_socket():
         # Socket handlers don't have 'g', so we create a temporary connection
-        import sqlite3
-        conn = sqlite3.connect(app.config['DATABASE'])
-        conn.row_factory = sqlite3.Row
+        import psycopg2
+        import psycopg2.extras
+        db_url = app.config.get('DATABASE_URL') or os.environ.get('DATABASE_URL')
+        conn = psycopg2.connect(db_url, cursor_factory=psycopg2.extras.DictCursor)
         return conn
 
     # Helper decorator for login required routes
@@ -78,6 +79,10 @@ def create_app(test_config=None):
         def wrapped_view(**kwargs):
             if g.user is None:
                 return redirect(url_for('index'))
+            if not g.user['is_verified']:
+                session['pending_verification_user_id'] = g.user['id']
+                flash("Your account is not verified. Please enter the verification code.")
+                return redirect(url_for('verify_email_page'))
             return view(**kwargs)
         return wrapped_view
 
@@ -88,11 +93,13 @@ def create_app(test_config=None):
         if user_id is None:
             g.user = None
         else:
-            g.user = db.get_db().execute(
-                'SELECT u.id, u.email, u.name, u.team_id, t.team_number, t.team_name '
+            cur = db.get_db().cursor()
+            cur.execute(
+                'SELECT u.id, u.email, u.name, u.team_id, u.is_verified, t.team_number, t.team_name '
                 'FROM users u JOIN teams t ON u.team_id = t.id '
-                'WHERE u.id = ?', (user_id,)
-            ).fetchone()
+                'WHERE u.id = %s', (user_id,)
+            )
+            g.user = cur.fetchone()
 
     # --- Routes ---
 
@@ -108,7 +115,7 @@ def create_app(test_config=None):
         return render_template('dashboard.html')
 
     def send_email(subject, recipient, body):
-        msg = Message(subject, recipients=[recipient])
+        msg = Message(subject, recipients=[recipient], sender=current_app.config['MAIL_USERNAME'])
         msg.body = body
         try:
             mail.send(msg)
@@ -120,14 +127,6 @@ def create_app(test_config=None):
     # Auth API
     # Auth API
     # Auth API
-    @app.route('/login/google')
-    def login_google():
-        if not app.config['GOOGLE_CLIENT_ID'] or not app.config['GOOGLE_CLIENT_SECRET']:
-            flash("Configuration Error: Google Credentials missing on server.")
-            return redirect(url_for('index'))
-            
-        redirect_uri = url_for('auth_callback', _external=True)
-        return oauth.google.authorize_redirect(redirect_uri)
 
     @app.route('/register')
     def register_page():
@@ -145,40 +144,54 @@ def create_app(test_config=None):
             flash("All fields are required.")
             return redirect(url_for('register_page'))
 
-        if len(password) < 12 or len(password) > 128:
-            flash("Password must be between 12 and 128 characters.")
+        if len(password) < 10 or len(password) > 128:
+            flash("Password must be between 10 and 128 characters.")
             return redirect(url_for('register_page'))
 
         database = db.get_db()
-        user = database.execute('SELECT id FROM users WHERE email = ?', (email,)).fetchone()
+        cur = database.cursor()
+        cur.execute('SELECT * FROM users WHERE email = %s', (email,))
+        user = cur.fetchone()
         
-        if user:
-            flash("Email already registered. Please login.")
-            return redirect(url_for('index'))
-
         # Team logic
-        team = database.execute('SELECT id FROM teams WHERE team_number = ?', (team_number,)).fetchone()
+        cur.execute('SELECT id FROM teams WHERE team_number = %s', (team_number,))
+        team = cur.fetchone()
         if not team:
-            cursor = database.execute(
-                'INSERT INTO teams (team_number, team_name) VALUES (?, ?)',
+            cur.execute(
+                'INSERT INTO teams (team_number, team_name) VALUES (%s, %s) RETURNING id',
                 (team_number, team_name)
             )
-            team_id = cursor.lastrowid
+            team_id = cur.fetchone()['id']
         else:
             team_id = team['id']
 
-        # Create User
-        cursor = database.execute(
-            'INSERT INTO users (email, name, password_hash, team_id, is_verified) VALUES (?, ?, ?, ?, ?)',
-            (email, name, generate_password_hash(password), team_id, 0)
-        )
-        user_id = cursor.lastrowid
+        if user:
+            if user['is_verified']:
+                flash("Email already registered. Please login.")
+                return redirect(url_for('index'))
+            else:
+                # Update existing unverified user
+                cur.execute(
+                    'UPDATE users SET name = %s, password_hash = %s, team_id = %s WHERE id = %s',
+                    (name, generate_password_hash(password), team_id, user['id'])
+                )
+                user_id = user['id']
+        else:
+            # Create New User
+            cur.execute(
+                'INSERT INTO users (email, name, password_hash, team_id, is_verified) VALUES (%s, %s, %s, %s, %s) RETURNING id',
+                (email, name, generate_password_hash(password), team_id, 0)
+            )
+            user_id = cur.fetchone()['id']
+        
+        database.commit()
 
         # Generate Verification Code
+        cur.execute('DELETE FROM email_verifications WHERE user_id = %s', (user_id,))
         code = ''.join(random.choices(string.digits, k=6))
         expires_at = datetime.now() + timedelta(minutes=15)
-        database.execute(
-            'INSERT INTO email_verifications (user_id, code, expires_at) VALUES (?, ?, ?)',
+        cur.execute(
+            'INSERT INTO email_verifications (user_id, code, expires_at) VALUES (%s, %s, %s)',
             (user_id, code, expires_at)
         )
         database.commit()
@@ -188,11 +201,10 @@ def create_app(test_config=None):
         if send_email("Verify Your Email", email, email_body):
             flash("Registration successful. Please enter the verification code sent to your email.")
         else:
-            flash("Registration successful, but there was an error sending the verification email. Please check the server console for the code.")
-            print(f"\n--- EMAIL VERIFICATION DEBUG ---\nUser: {email}\nCode: {code}\n--------------------------------\n")
+            flash("Registration successful, but there was an error sending the verification email. Our team is looking into it.")
+            print(f"\n--- EMAIL VERIFICATION ERROR ---\nUser: {email}\nCode: {code}\n--------------------------------\n")
         
         session['pending_verification_user_id'] = user_id
-        flash("Registration successful. Please enter the verification code sent to your email (check server console).")
         return redirect(url_for('verify_email_page'))
 
     @app.route('/verify-email')
@@ -211,14 +223,16 @@ def create_app(test_config=None):
             return redirect(url_for('verify_email_page'))
 
         database = db.get_db()
-        verification = database.execute(
-            'SELECT * FROM email_verifications WHERE user_id = ? AND code = ? AND expires_at > ?',
+        cur = database.cursor()
+        cur.execute(
+            'SELECT * FROM email_verifications WHERE user_id = %s AND code = %s AND expires_at > %s',
             (user_id, code, datetime.now())
-        ).fetchone()
+        )
+        verification = cur.fetchone()
 
         if verification:
-            database.execute('UPDATE users SET is_verified = 1 WHERE id = ?', (user_id,))
-            database.execute('DELETE FROM email_verifications WHERE user_id = ?', (user_id,))
+            cur.execute('UPDATE users SET is_verified = 1 WHERE id = %s', (user_id,))
+            cur.execute('DELETE FROM email_verifications WHERE user_id = %s', (user_id,))
             database.commit()
             session.pop('pending_verification_user_id', None)
             session['user_id'] = user_id
@@ -235,14 +249,16 @@ def create_app(test_config=None):
             return redirect(url_for('index'))
 
         database = db.get_db()
-        user = database.execute('SELECT email FROM users WHERE id = ?', (user_id,)).fetchone()
+        cur = database.cursor()
+        cur.execute('SELECT email FROM users WHERE id = %s', (user_id,))
+        user = cur.fetchone()
         
         if user:
             code = ''.join(random.choices(string.digits, k=6))
             expires_at = datetime.now() + timedelta(minutes=15)
-            database.execute('DELETE FROM email_verifications WHERE user_id = ?', (user_id,))
-            database.execute(
-                'INSERT INTO email_verifications (user_id, code, expires_at) VALUES (?, ?, ?)',
+            cur.execute('DELETE FROM email_verifications WHERE user_id = %s', (user_id,))
+            cur.execute(
+                'INSERT INTO email_verifications (user_id, code, expires_at) VALUES (%s, %s, %s)',
                 (user_id, code, expires_at)
             )
             database.commit()
@@ -250,42 +266,44 @@ def create_app(test_config=None):
             if send_email("New Verification Code", user['email'], email_body):
                 flash("A new verification code has been sent.")
             else:
-                flash("There was an error sending the verification email. Please check the server console.")
-                print(f"\n--- EMAIL VERIFICATION DEBUG (RESEND) ---\nUser: {user['email']}\nCode: {code}\n-----------------------------------------\n")
-            flash("A new verification code has been sent.")
+                flash("There was an error sending the verification email. Please try again later.")
         
         return redirect(url_for('verify_email_page'))
 
     @app.route('/auth/login', methods=('POST',))
     def auth_login():
+        print(f"\n[LOGIN DEBUG] Received POST request to /auth/login from {request.remote_addr}")
+        print(f"[LOGIN DEBUG] Headers: {dict(request.headers)}")
         email = request.form.get('email')
         password = request.form.get('password')
+        print(f"[LOGIN DEBUG] Attempting login for email: {email}")
 
         database = db.get_db()
-        user = database.execute(
-            'SELECT * FROM users WHERE email = ?', (email,)
-        ).fetchone()
+        cur = database.cursor()
+        cur.execute(
+            'SELECT * FROM users WHERE email = %s', (email,)
+        )
+        user = cur.fetchone()
 
         if user and user['password_hash'] and check_password_hash(user['password_hash'], password):
             if not user['is_verified']:
                 session['pending_verification_user_id'] = user['id']
                 
-                # Generate and send verification code to cyborg email
+                # Generate and send verification code to user
                 code = ''.join(random.choices(string.digits, k=6))
                 expires_at = datetime.now() + timedelta(minutes=15)
                 
-                database.execute('DELETE FROM email_verifications WHERE user_id = ?', (user['id'],))
-                database.execute(
-                    'INSERT INTO email_verifications (user_id, code, expires_at) VALUES (?, ?, ?)',
+                cur.execute('DELETE FROM email_verifications WHERE user_id = %s', (user['id'],))
+                cur.execute(
+                    'INSERT INTO email_verifications (user_id, code, expires_at) VALUES (%s, %s, %s)',
                     (user['id'], code, expires_at)
                 )
                 database.commit()
                 
-                cyborg_email = current_app.config.get('MAIL_USERNAME', 'cyborg.13747@gmail.com')
-                email_body = f"User {user['email']} requested login. Verification code: {code}"
-                send_email("Login Verification Code", cyborg_email, email_body)
+                email_body = f"Hello,\n\nYour verification code for login is: {code}\n\nThis code will expire in 15 minutes."
+                send_email("Login Verification Code", user['email'], email_body)
                 
-                flash("Please enter the verification code sent to the administrator email.")
+                flash("Please enter the verification code sent to your email.")
                 return redirect(url_for('verify_email_page'))
                 
             session.clear()
@@ -303,13 +321,15 @@ def create_app(test_config=None):
     def auth_forgot_password():
         email = request.form.get('email')
         database = db.get_db()
-        user = database.execute('SELECT id FROM users WHERE email = ?', (email,)).fetchone()
+        cur = database.cursor()
+        cur.execute('SELECT id FROM users WHERE email = %s', (email,))
+        user = cur.fetchone()
 
         if user:
             token = str(uuid.uuid4())
             expires_at = datetime.now() + timedelta(hours=1)
-            database.execute(
-                'INSERT INTO password_resets (user_id, token, expires_at) VALUES (?, ?, ?)',
+            cur.execute(
+                'INSERT INTO password_resets (user_id, token, expires_at) VALUES (%s, %s, %s)',
                 (user['id'], token, expires_at)
             )
             database.commit()
@@ -319,8 +339,8 @@ def create_app(test_config=None):
             if send_email("Password Reset Request", email, email_body):
                 flash("If that email is registered, a reset link has been sent.")
             else:
-                flash("If that email is registered, a reset link has been sent (check server console).")
-                print(f"\n--- PASSWORD RESET DEBUG ---\nUser: {email}\nLink: {reset_link}\n----------------------------\n")
+                flash("If that email is registered, a reset link has been sent. Please contact support if you don't receive it.")
+                print(f"Password reset link for {email}: {reset_link}")
         else:
             flash("If that email is registered, a reset link has been sent.")
             
@@ -335,132 +355,42 @@ def create_app(test_config=None):
         token = request.form.get('token')
         password = request.form.get('password')
 
-        if len(password) < 12 or len(password) > 128:
-            flash("Password must be between 12 and 128 characters.")
+        if len(password) < 10 or len(password) > 128:
+            flash("Password must be between 10 and 128 characters.")
             return redirect(url_for('reset_password_page', token=token))
 
         database = db.get_db()
-        reset = database.execute(
-            'SELECT * FROM password_resets WHERE token = ? AND expires_at > ?',
+        cur = database.cursor()
+        cur.execute(
+            'SELECT * FROM password_resets WHERE token = %s AND expires_at > %s',
             (token, datetime.now())
-        ).fetchone()
+        )
+        reset = cur.fetchone()
 
         if reset:
-            database.execute(
-                'UPDATE users SET password_hash = ? WHERE id = ?',
+            cur.execute(
+                'UPDATE users SET password_hash = %s, is_verified = 0 WHERE id = %s',
                 (generate_password_hash(password), reset['user_id'])
             )
-            database.execute('DELETE FROM password_resets WHERE id = ?', (reset['id'],))
+            cur.execute('DELETE FROM password_resets WHERE id = %s', (reset['id'],))
             database.commit()
-            flash("Password reset successful. Please login.")
-            return redirect(url_for('index'))
+            flash("Password reset successful. Please verify your email again.")
+            session['pending_verification_user_id'] = reset['user_id']
+            
+            # Send new OTP
+            code = ''.join(random.choices(string.digits, k=6))
+            expires_at = datetime.now() + timedelta(minutes=15)
+            cur.execute('INSERT INTO email_verifications (user_id, code, expires_at) VALUES (%s, %s, %s)', (reset['user_id'], code, expires_at))
+            database.commit()
+            
+            cur.execute('SELECT email FROM users WHERE id = %s', (reset['user_id'],))
+            user_email = cur.fetchone()['email']
+            send_email("New Verification Code", user_email, f"Your verification code is: {code}")
+            
+            return redirect(url_for('verify_email_page'))
         
         flash("Invalid or expired reset token.")
         return redirect(url_for('index'))
-
-    @app.route('/auth/callback')
-    def auth_callback():
-        try:
-            token = oauth.google.authorize_access_token()
-        except Exception as e:
-            flash(f"Authentication failed: {str(e)}")
-            return redirect(url_for('index'))
-            
-        user_info = token.get('userinfo')
-        if not user_info:
-             user_info = oauth.google.userinfo()
-             
-        # Check if user exists by google_id
-        database = db.get_db()
-        user = database.execute(
-            'SELECT * FROM users WHERE google_id = ?', (user_info['sub'],)
-        ).fetchone()
-
-        if not user:
-            # Check by email for potential account linking
-            user = database.execute(
-                'SELECT * FROM users WHERE email = ?', (user_info['email'],)
-            ).fetchone()
-            
-            if user:
-                # Link account!
-                database.execute(
-                    'UPDATE users SET google_id = ? WHERE id = ?',
-                    (user_info['sub'], user['id'])
-                )
-                database.commit()
-
-        if user:
-            session.clear()
-            session['user_id'] = user['id']
-            return redirect(url_for('dashboard'))
-        else:
-            # New user - temporary store info and redirect to finish registration
-            session['google_user_info'] = user_info
-            return redirect(url_for('register_finish_page'))
-
-    @app.route('/register/google')
-    def register_finish_page():
-        user_info = session.get('google_user_info')
-        if not user_info:
-            return redirect(url_for('index'))
-            
-        return render_template('register_finish.html', 
-                             email=user_info['email'], 
-                             name=user_info.get('name'))
-
-    @app.route('/auth/register-finish', methods=('POST',))
-    def register_finish():
-        user_info = session.get('google_user_info')
-        if not user_info:
-            return redirect(url_for('index'))
-            
-        team_number = request.form['team_number']
-        team_name = request.form['team_name']
-        
-        database = db.get_db()
-        try:
-            # Check/Create Team
-            team = database.execute('SELECT id FROM teams WHERE team_number = ?', (team_number,)).fetchone()
-            if team is None:
-                cursor = database.execute(
-                    'INSERT INTO teams (team_number, team_name) VALUES (?, ?)',
-                    (team_number, team_name)
-                )
-                team_id = cursor.lastrowid
-            else:
-                team_id = team['id']
-
-            # Create User (Initially Unverified)
-            cursor = database.execute(
-                'INSERT INTO users (google_id, email, name, team_id, is_verified) VALUES (?, ?, ?, ?, ?)',
-                (user_info['sub'], user_info['email'], user_info.get('name'), team_id, 0)
-            )
-            user_id = cursor.lastrowid
-            
-            # Generate and Send Verification Code
-            code = ''.join(random.choices(string.digits, k=6))
-            expires_at = datetime.now() + timedelta(minutes=15)
-            database.execute(
-                'INSERT INTO email_verifications (user_id, code, expires_at) VALUES (?, ?, ?)',
-                (user_id, code, expires_at)
-            )
-            database.commit()
-            
-            email_body = f"Hello {user_info.get('name')},\n\nYour Google account registration is almost complete. Your verification code is: {code}"
-            send_email("Verify Your Email", user_info['email'], email_body)
-
-            session.pop('google_user_info', None)
-            session['pending_verification_user_id'] = user_id
-            flash("Registration successful. Please enter the verification code sent to your email.")
-            return redirect(url_for('verify_email_page'))
-
-        except database.IntegrityError:
-            flash("User already registered or invalid data.")
-            return redirect(url_for('index'))
-        except Exception as e:
-            flash(f"Registration error: {str(e)}")
-            return redirect(url_for('index'))
 
     @app.route('/auth/logout') 
     def logout():
@@ -485,11 +415,12 @@ def create_app(test_config=None):
     def auth_delete_account():
         user_id = g.user['id']
         database = db.get_db()
+        cur = database.cursor()
         try:
             # Delete associated records (manual cascade for safety)
-            database.execute('DELETE FROM email_verifications WHERE user_id = ?', (user_id,))
-            database.execute('DELETE FROM password_resets WHERE user_id = ?', (user_id,))
-            database.execute('DELETE FROM users WHERE id = ?', (user_id,))
+            cur.execute('DELETE FROM email_verifications WHERE user_id = %s', (user_id,))
+            cur.execute('DELETE FROM password_resets WHERE user_id = %s', (user_id,))
+            cur.execute('DELETE FROM users WHERE id = %s', (user_id,))
             database.commit()
             session.clear()
             flash("Your account has been successfully deleted.")
@@ -517,32 +448,42 @@ def create_app(test_config=None):
             return redirect(url_for('profile_page'))
 
         database = db.get_db()
+        cur = database.cursor()
         
         # Team logic
-        team = database.execute('SELECT id FROM teams WHERE team_number = ?', (team_number,)).fetchone()
+        cur.execute('SELECT id FROM teams WHERE team_number = %s', (team_number,))
+        team = cur.fetchone()
         if not team:
-            cursor = database.execute(
-                'INSERT INTO teams (team_number, team_name) VALUES (?, ?)',
+            cur.execute(
+                'INSERT INTO teams (team_number, team_name) VALUES (%s, %s) RETURNING id',
                 (team_number, team_name)
             )
-            team_id = cursor.lastrowid
+            team_id = cur.fetchone()['id']
         else:
             team_id = team['id']
             # Update team name if it already exists (allows fixing typos)
-            database.execute('UPDATE teams SET team_name = ? WHERE id = ?', (team_name, team_id))
+            cur.execute('UPDATE teams SET team_name = %s WHERE id = %s', (team_name, team_id))
         
         # Update User
-        database.execute(
-            'UPDATE users SET name = ?, team_id = ? WHERE id = ?',
+        cur.execute(
+            'UPDATE users SET name = %s, team_id = %s WHERE id = %s',
             (name, team_id, g.user['id'])
         )
 
         # Password update
         if new_password:
-            database.execute(
-                'UPDATE users SET password_hash = ?, is_verified = 0 WHERE id = ?',
+            if len(new_password) < 10 or len(new_password) > 128:
+                flash("Password must be between 10 and 128 characters.")
+                return redirect(url_for('profile_page'))
+
+            cur.execute(
+                'UPDATE users SET password_hash = %s, is_verified = 0 WHERE id = %s',
                 (generate_password_hash(new_password), g.user['id'])
             )
+            database.commit()
+            session.clear() # Force re-login and verification
+            flash("Password updated! Please verify your email to log back in.")
+            return redirect(url_for('index'))
 
         database.commit()
         flash("Profile updated successfully!")
@@ -554,6 +495,7 @@ def create_app(test_config=None):
     @login_required
     def matches():
         database = db.get_db()
+        cur = database.cursor()
         if request.method == 'POST':
             data = request.get_json()
             match_number = data.get('match_number')
@@ -562,44 +504,44 @@ def create_app(test_config=None):
             if not match_number:
                 return jsonify({'error': 'Match number is required'}), 400
 
-            cursor = database.execute(
-                'INSERT INTO matches (match_number, match_type, creator_team_id) VALUES (?, ?, ?)',
+            cur.execute(
+                'INSERT INTO matches (match_number, match_type, creator_team_id) VALUES (%s, %s, %s) RETURNING id',
                 (match_number, match_type, g.user['team_id'])
             )
-            match_id = cursor.lastrowid
+            match_id = cur.fetchone()['id']
             
-            # Automatically add creator to match_alliances (defaulting to Red for now, or let them choose)
             # Creator is always Red for now
-            database.execute(
-                'INSERT INTO match_alliances (match_id, team_id, alliance_color, last_seen) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+            cur.execute(
+                'INSERT INTO match_alliances (match_id, team_id, alliance_color, last_seen) VALUES (%s, %s, %s, CURRENT_TIMESTAMP)',
                 (match_id, g.user['team_id'], 'Red') 
             )
             
             # Create empty strategy/drawing entries
             for phase in ['Autonomous', 'Teleop', 'Endgame']:
-                database.execute(
-                     'INSERT INTO strategies (match_id, phase) VALUES (?, ?)',
+                cur.execute(
+                     'INSERT INTO strategies (match_id, phase) VALUES (%s, %s)',
                      (match_id, phase)
                 )
-                database.execute(
-                     'INSERT INTO drawings (match_id, phase) VALUES (?, ?)',
+                cur.execute(
+                     'INSERT INTO drawings (match_id, phase) VALUES (%s, %s)',
                      (match_id, phase)
                 )
 
             database.commit()
             return jsonify({'message': 'Match created', 'id': match_id}), 201
 
-        # GET: List matches for the user's team (either created or invited)
-        matches = database.execute(
+        # GET: List matches for the user's team
+        cur.execute(
             '''
             SELECT m.id, m.match_number, m.match_type, t.team_number as creator_team_number, m.creator_team_id
             FROM matches m
             JOIN teams t ON m.creator_team_id = t.id
             JOIN match_alliances ma ON m.id = ma.match_id
-            WHERE ma.team_id = ?
+            WHERE ma.team_id = %s
             ORDER BY m.id DESC
             ''', (g.user['team_id'],)
-        ).fetchall()
+        )
+        matches = cur.fetchall()
         
         return jsonify([dict(row) for row in matches])
 
@@ -607,11 +549,13 @@ def create_app(test_config=None):
     @login_required
     def delete_match(match_id):
         database = db.get_db()
+        cur = database.cursor()
         
         # Check if the user's team is the creator or part of the match
-        match = database.execute(
-            'SELECT creator_team_id FROM matches WHERE id = ?', (match_id,)
-        ).fetchone()
+        cur.execute(
+            'SELECT creator_team_id FROM matches WHERE id = %s', (match_id,)
+        )
+        match = cur.fetchone()
         
         if not match:
             return jsonify({'error': 'Match not found'}), 404
@@ -620,13 +564,29 @@ def create_app(test_config=None):
         # User requested the delete button/ability to be available to everyone at all times.
 
         try:
+            # Broadcast deletion to all users in the match room BEFORE deleting the match
+            # so they receive the event before the room is destroyed or invalid
+            socketio.emit('match_deleted', {'match_id': match_id}, room=str(match_id))
+            
+            # Find all teams involved (alliances and invites) to broadcast to their dashboards
+            cur.execute('''
+                SELECT DISTINCT team_id FROM match_alliances WHERE match_id = %s
+                UNION
+                SELECT DISTINCT to_team_id FROM invites WHERE match_id = %s
+            ''', (match_id, match_id))
+            involved_teams = cur.fetchall()
+            
+            for team in involved_teams:
+                team_room_name = f"team_{team['team_id']}"
+                socketio.emit('match_deleted', {'match_id': match_id}, room=team_room_name)
+            
             # Cascading deletion
-            database.execute('DELETE FROM messages WHERE match_id = ?', (match_id,))
-            database.execute('DELETE FROM strategies WHERE match_id = ?', (match_id,))
-            database.execute('DELETE FROM drawings WHERE match_id = ?', (match_id,))
-            database.execute('DELETE FROM invites WHERE match_id = ?', (match_id,))
-            database.execute('DELETE FROM match_alliances WHERE match_id = ?', (match_id,))
-            database.execute('DELETE FROM matches WHERE id = ?', (match_id,))
+            cur.execute('DELETE FROM messages WHERE match_id = %s', (match_id,))
+            cur.execute('DELETE FROM strategies WHERE match_id = %s', (match_id,))
+            cur.execute('DELETE FROM drawings WHERE match_id = %s', (match_id,))
+            cur.execute('DELETE FROM invites WHERE match_id = %s', (match_id,))
+            cur.execute('DELETE FROM match_alliances WHERE match_id = %s', (match_id,))
+            cur.execute('DELETE FROM matches WHERE id = %s', (match_id,))
             
             database.commit()
             return jsonify({'message': 'Match deleted successfully'}), 200
@@ -642,34 +602,43 @@ def create_app(test_config=None):
         to_team_number = data.get('to_team_number') # Invite by team number
         
         database = db.get_db()
+        cur = database.cursor()
         
         # Find the team
-        to_team = database.execute('SELECT id FROM teams WHERE team_number = ?', (to_team_number,)).fetchone()
+        cur.execute('SELECT id FROM teams WHERE team_number = %s', (to_team_number,))
+        to_team = cur.fetchone()
         if not to_team:
              return jsonify({'error': 'Team not found'}), 404
              
         # Check if already invited or in match
-        existing = database.execute(
-            'SELECT id FROM match_alliances WHERE match_id = ? AND team_id = ?',
+        cur.execute(
+            'SELECT id FROM match_alliances WHERE match_id = %s AND team_id = %s',
             (match_id, to_team['id'])
-        ).fetchone()
+        )
+        existing = cur.fetchone()
         
         if existing:
              return jsonify({'error': 'Team already in match'}), 400
 
-        database.execute(
-            'INSERT INTO invites (match_id, from_team_id, to_team_id) VALUES (?, ?, ?)',
+        cur.execute(
+            'INSERT INTO invites (match_id, from_team_id, to_team_id) VALUES (%s, %s, %s) RETURNING id',
             (match_id, g.user['team_id'], to_team['id'])
         )
+        invite_id = cur.fetchone()['id']
         database.commit()
         
         # Emit real-time invite via Socket.IO
+        cur.execute('SELECT match_number FROM matches WHERE id = %s', (match_id,))
+        match_info = cur.fetchone()
         socketio.emit('new_invite', {
-            'id': database.execute('SELECT last_insert_rowid()').fetchone()[0],
+            'id': invite_id,
             'match_id': match_id,
-            'match_number': database.execute('SELECT match_number FROM matches WHERE id = ?', (match_id,)).fetchone()['match_number'],
+            'match_number': match_info['match_number'],
             'from_team_number': g.user['team_number']
         }, room=f"team_{to_team['id']}")
+        
+        # Also notify everyone in the match room to refresh their invite lists
+        socketio.emit('refresh_data', {'match_id': int(match_id)}, room=str(match_id))
 
         return jsonify({'message': 'Invite sent'}), 201
         
@@ -677,15 +646,27 @@ def create_app(test_config=None):
     @login_required
     def get_invites():
         database = db.get_db()
-        invites = database.execute(
+        cur = database.cursor()
+        
+        # Aggressively delete any Pending invites older than 20 minutes
+        # PostgreSQL syntax: NOW() - INTERVAL '20 minutes'
+        cur.execute('''
+            DELETE FROM invites 
+            WHERE status = 'Pending' 
+            AND created_at <= NOW() - INTERVAL '20 minutes'
+        ''')
+        database.commit()
+        
+        cur.execute(
             '''
             SELECT i.id, i.match_id, m.match_number, t.team_number as from_team
             FROM invites i
             JOIN matches m ON i.match_id = m.id
             JOIN teams t ON i.from_team_id = t.id
-            WHERE i.to_team_id = ? AND i.status = 'Pending'
+            WHERE i.to_team_id = %s AND i.status = 'Pending'
             ''', (g.user['team_id'],)
-        ).fetchall()
+        )
+        invites = cur.fetchall()
         return jsonify([dict(row) for row in invites])
 
     @app.route('/api/invites/<int:invite_id>/respond', methods=('POST',))
@@ -698,18 +679,20 @@ def create_app(test_config=None):
              return jsonify({'error': 'Invalid status'}), 400
              
         database = db.get_db()
-        invite = database.execute('SELECT * FROM invites WHERE id = ?', (invite_id,)).fetchone()
+        cur = database.cursor()
+        cur.execute('SELECT * FROM invites WHERE id = %s', (invite_id,))
+        invite = cur.fetchone()
         
         if not invite or invite['to_team_id'] != g.user['team_id']:
             return jsonify({'error': 'Invite not found or not for you'}), 404
             
-        database.execute('UPDATE invites SET status = ? WHERE id = ?', (status, invite_id))
+        cur.execute('UPDATE invites SET status = %s WHERE id = %s', (status, invite_id))
         
         if status == 'Accepted':
             # Add to match alliances
-            database.execute(
-                'INSERT INTO match_alliances (match_id, team_id, alliance_color, last_seen) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
-                (invite['match_id'], g.user['team_id'], 'Blue') # Defaulting to Blue? or Unknown.
+            cur.execute(
+                'INSERT INTO match_alliances (match_id, team_id, alliance_color, last_seen) VALUES (%s, %s, %s, CURRENT_TIMESTAMP)',
+                (invite['match_id'], g.user['team_id'], 'Blue') # Defaulting to Blue
             )
         
         database.commit()
@@ -717,17 +700,19 @@ def create_app(test_config=None):
         # Notify both teams via socket to refresh their views
         socketio.emit('refresh_data', {'match_id': invite['match_id']}, room=str(invite['match_id']))
         
-        return jsonify({'message': f'Invite {status}'}), 200
+        return jsonify({'message': f'Invite {status}', 'match_id': invite['match_id'], 'match_url': f'/match/{invite["match_id"]}'}), 200
 
     @app.route('/match/<int:match_id>')
     @login_required
     def match_room(match_id):
         database = db.get_db()
+        cur = database.cursor()
         # Verify access
-        access = database.execute(
-            'SELECT id FROM match_alliances WHERE match_id = ? AND team_id = ?',
+        cur.execute(
+            'SELECT id FROM match_alliances WHERE match_id = %s AND team_id = %s',
             (match_id, g.user['team_id'])
-        ).fetchone()
+        )
+        access = cur.fetchone()
 
         if not access:
             flash("You do not have access to this match.")
@@ -746,16 +731,18 @@ def create_app(test_config=None):
     @login_required
     def get_match_data(match_id):
         database = db.get_db()
+        cur = database.cursor()
         
         # Check access and update Last Seen
         print(f"DEBUG: Getting match data for {match_id}")
         if not g.user:
             return jsonify({'error': 'Not logged in'}), 401
             
-        access = database.execute(
-            'SELECT id FROM match_alliances WHERE match_id = ? AND team_id = ?',
+        cur.execute(
+            'SELECT id FROM match_alliances WHERE match_id = %s AND team_id = %s',
             (match_id, g.user['team_id'])
-        ).fetchone()
+        )
+        access = cur.fetchone()
         
         print(f"DEBUG: Access found? {access is not None}")
         if not access:
@@ -763,68 +750,79 @@ def create_app(test_config=None):
             return jsonify({'error': 'Unauthorized'}), 403
 
         # Update last_seen
-        database.execute(
-            'UPDATE match_alliances SET last_seen = CURRENT_TIMESTAMP WHERE id = ?',
+        cur.execute(
+            'UPDATE match_alliances SET last_seen = CURRENT_TIMESTAMP WHERE id = %s',
             (access['id'],)
         )
         database.commit()
 
         # Messages
-        messages = database.execute(
+        cur.execute(
             '''
-            SELECT m.content, m.timestamp, t.team_number, t.team_name
+            SELECT m.id, m.sender_user_id, m.content, m.timestamp, t.team_number, t.team_name, u.name as username,
+                   m.message_type, m.media_url, mt.creator_team_id
             FROM messages m
             JOIN teams t ON m.sender_team_id = t.id
-            WHERE m.match_id = ?
+            LEFT JOIN users u ON m.sender_user_id = u.id
+            JOIN matches mt ON m.match_id = mt.id
+            WHERE m.match_id = %s
             ORDER BY m.timestamp ASC
             ''', (match_id,)
-        ).fetchall()
+        )
+        messages = cur.fetchall()
+        
+        messages_list = []
+        for m in messages:
+            md = dict(m)
+            # Ensure timestamp is ISO with 'Z' for UTC
+            ts = md.get('timestamp')
+            if ts:
+                if ' ' in ts: ts = ts.replace(' ', 'T')
+                if not ts.endswith('Z'): ts += 'Z'
+                md['timestamp'] = ts
+            messages_list.append(md)
 
         # Strategies
-        strategies = database.execute(
-            'SELECT phase, text_content FROM strategies WHERE match_id = ?',
+        cur.execute(
+            'SELECT phase, text_content FROM strategies WHERE match_id = %s',
             (match_id,)
-        ).fetchall()
+        )
+        strategies = cur.fetchall()
         
         # Drawings - Return all phases
-        drawings = database.execute(
-            'SELECT phase, drawing_data_json FROM drawings WHERE match_id = ?',
+        cur.execute(
+            'SELECT phase, drawing_data_json FROM drawings WHERE match_id = %s',
             (match_id,)
-        ).fetchall()
+        )
+        drawings = cur.fetchall()
         
         # Teams in this match with Active Status
         # Active if seen in last 30 seconds
-        teams = database.execute(
+        cur.execute(
             '''
             SELECT t.team_number, t.team_name, ma.alliance_color, ma.last_seen,
                    (CASE WHEN ma.last_seen IS NOT NULL 
-                         THEN (CAST(strftime('%s', 'now') AS INTEGER) - CAST(strftime('%s', ma.last_seen) AS INTEGER)) < 30 
-                         ELSE 0 END) as is_active
+                         THEN (EXTRACT(EPOCH FROM (NOW() - ma.last_seen))) < 30 
+                         ELSE FALSE END) as is_active
             FROM match_alliances ma
             JOIN teams t ON ma.team_id = t.id
-            WHERE ma.match_id = ?
+            WHERE ma.match_id = %s
             ''', (match_id,)
-        ).fetchall()
+        )
+        teams = cur.fetchall()
 
         # Invites
-        invites = database.execute(
+        cur.execute(
             '''
             SELECT i.*, t.team_number as from_team_number, t2.team_number as to_team_number
             FROM invites i
             JOIN teams t ON i.from_team_id = t.id
             JOIN teams t2 ON i.to_team_id = t2.id
-            WHERE i.match_id = ?
+            WHERE i.match_id = %s
             ''', (match_id,)
-        ).fetchall()
+        )
+        invites = cur.fetchall()
         
-        # Format messages with string timestamps
-        messages_list = []
-        for m in messages:
-            msg_dict = dict(m)
-            if msg_dict.get('timestamp'):
-                msg_dict['timestamp'] = str(msg_dict['timestamp'])
-            messages_list.append(msg_dict)
-
         return jsonify({
             'match_id': match_id,
             'messages': messages_list,
@@ -833,6 +831,74 @@ def create_app(test_config=None):
             'teams': [dict(a) for a in teams],
             'invites': [dict(i) for i in invites]
         })
+
+    @app.route('/api/messages/<int:message_id>', methods=('DELETE',))
+    @login_required
+    def delete_message(message_id):
+        database = db.get_db()
+        cur = database.cursor()
+        cur.execute(
+            'SELECT m.*, mt.creator_team_id '
+            'FROM messages m '
+            'JOIN matches mt ON m.match_id = mt.id '
+            'WHERE m.id = %s', (message_id,)
+        )
+        message = cur.fetchone()
+
+        if not message:
+            return jsonify({'error': 'Message not found'}), 404
+
+        # Check permission: Only sender or match creator can delete
+        is_sender = message['sender_user_id'] == session.get('user_id')
+        is_creator = message['creator_team_id'] == g.user['team_id']
+
+        if not (is_sender or is_creator):
+            return jsonify({'error': 'Unauthorized'}), 401
+
+        # Delete media file if it exists
+        if message['media_url']:
+            # Extract filename from URL (e.g., /static/uploads/filename.jpg)
+            parts = message['media_url'].split('/')
+            if len(parts) > 0:
+                filename = parts[-1]
+                file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                if os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                    except Exception as e:
+                        print(f"Error deleting file {file_path}: {e}")
+
+        cur.execute('DELETE FROM messages WHERE id = %s', (message_id,))
+        database.commit()
+
+        # Broadcast deletion to the match room
+        socketio.emit('message_deleted', {'id': message_id}, room=str(message['match_id']))
+
+        return '', 204
+
+    @app.route('/api/upload', methods=['POST'])
+    @login_required
+    def upload_file():
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file part'}), 400
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No selected file'}), 400
+        
+        if file:
+            filename = str(uuid.uuid4()) + "_" + file.filename
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            file.save(file_path)
+            
+            # Determine type
+            ext = filename.split('.')[-1].lower()
+            msg_type = 'image' if ext in ['jpg', 'jpeg', 'png', 'gif', 'webp'] else 'video' if ext in ['mp4', 'webm', 'mov'] else 'text'
+            
+            return jsonify({
+                'url': url_for('static', filename='uploads/' + filename),
+                'type': msg_type
+            })
+        return jsonify({'error': 'Upload failed'}), 500
 
     @app.route('/api/matches/<int:match_id>/messages', methods=('POST',))
     @login_required
@@ -844,10 +910,11 @@ def create_app(test_config=None):
             return jsonify({'error': 'No content'}), 400
             
         database = db.get_db()
+        cur = database.cursor()
         # Verify access (omitted for brevity, but should be there)
         
-        database.execute(
-            'INSERT INTO messages (match_id, sender_team_id, content) VALUES (?, ?, ?)',
+        cur.execute(
+            'INSERT INTO messages (match_id, sender_team_id, content) VALUES (%s, %s, %s)',
             (match_id, g.user['team_id'], content)
         )
         database.commit()
@@ -864,8 +931,9 @@ def create_app(test_config=None):
             return jsonify({'error': 'Invalid phase'}), 400
             
         database = db.get_db()
-        database.execute(
-            'UPDATE strategies SET text_content = ? WHERE match_id = ? AND phase = ?',
+        cur = database.cursor()
+        cur.execute(
+            'UPDATE strategies SET text_content = %s WHERE match_id = %s AND phase = %s',
             (text_content, match_id, phase)
         )
         database.commit()
@@ -882,8 +950,9 @@ def create_app(test_config=None):
             return jsonify({'error': 'Invalid phase'}), 400
 
         database = db.get_db()
-        database.execute(
-            'UPDATE drawings SET drawing_data_json = ?, last_updated = CURRENT_TIMESTAMP WHERE match_id = ? AND phase = ?',
+        cur = database.cursor()
+        cur.execute(
+            'UPDATE drawings SET drawing_data_json = %s, last_updated = CURRENT_TIMESTAMP WHERE match_id = %s AND phase = %s',
             (drawing_data, match_id, phase)
         )
         database.commit()
@@ -893,20 +962,22 @@ def create_app(test_config=None):
     @login_required
     def team_status(team_number):
         database = db.get_db()
+        cur = database.cursor()
         # Check if team exists and if any user from that team has been seen recently
-        # We'll check match_alliances last_seen (active in any room)
-        team = database.execute('SELECT id FROM teams WHERE team_number = ?', (team_number,)).fetchone()
+        cur.execute('SELECT id FROM teams WHERE team_number = %s', (team_number,))
+        team = cur.fetchone()
         if not team:
             return jsonify({'active': False, 'exists': False})
         
         # Check if any alliance record for this team has been updated in the last 60 seconds
-        active = database.execute(
+        cur.execute(
             '''
             SELECT 1 FROM match_alliances 
-            WHERE team_id = ? AND (CAST(strftime('%s', 'now') AS INTEGER) - CAST(strftime('%s', last_seen) AS INTEGER)) < 60
+            WHERE team_id = %s AND (EXTRACT(EPOCH FROM (NOW() - last_seen)) < 60)
             LIMIT 1
             ''', (team['id'],)
-        ).fetchone()
+        )
+        active = cur.fetchone()
         
         return jsonify({'active': bool(active), 'exists': True})
 
@@ -917,31 +988,36 @@ def create_app(test_config=None):
         match_id = data.get('match_id')
         user_id = session.get('user_id')
         
-        if not match_id or not user_id:
+        if not user_id:
             return
 
         with app.app_context():
             # Get user's team_id
             database = db.get_db()
-            user = database.execute('SELECT team_id FROM users WHERE id = ?', (user_id,)).fetchone()
+            cur = database.cursor()
+            cur.execute('SELECT team_id FROM users WHERE id = %s', (user_id,))
+            user = cur.fetchone()
             if not user:
                 return
             
-            # Join personal team room for invites
+            # Join personal team room for invites ALWAYS
             join_room(f"team_{user['team_id']}")
+            print(f"User {user_id} joined team_room: team_{user['team_id']}")
             
-            # Verify match access
-            access = database.execute(
-                'SELECT id FROM match_alliances WHERE match_id = ? AND team_id = ?',
-                (match_id, user['team_id'])
-            ).fetchone()
+            # Verify match access if match_id provided
+            if match_id:
+                cur.execute(
+                    'SELECT id FROM match_alliances WHERE match_id = %s AND team_id = %s',
+                    (match_id, user['team_id'])
+                )
+                access = cur.fetchone()
 
-            if access:
-                room = str(match_id)
-                join_room(room)
-                print(f"User {user_id} joined room: {room} and team_room: team_{user['team_id']}")
-            else:
-                print(f"User {user_id} denied access to room: {match_id}")
+                if access:
+                    room = str(match_id)
+                    join_room(room)
+                    print(f"User {user_id} joined match room: {room}")
+                else:
+                    print(f"User {user_id} denied access to match room: {match_id}")
 
     @socketio.on('chat_message')
     def handle_chat(data):
@@ -951,31 +1027,61 @@ def create_app(test_config=None):
 
         room = str(match_id)
         database = get_db_for_socket()
+        cur = database.cursor()
         try:
             # Verify access and get team info
-            user = database.execute(
+            cur.execute(
                 'SELECT u.team_id, t.team_number '
                 'FROM users u JOIN teams t ON u.team_id = t.id '
-                'WHERE u.id = ?', (user_id,)
-            ).fetchone()
+                'WHERE u.id = %s', (user_id,)
+            )
+            user = cur.fetchone()
             
             if not user: return
             
-            access = database.execute(
-                'SELECT id FROM match_alliances WHERE match_id = ? AND team_id = ?',
+            cur.execute(
+                'SELECT id FROM match_alliances WHERE match_id = %s AND team_id = %s',
                 (match_id, user['team_id'])
-            ).fetchone()
+            )
+            access = cur.fetchone()
 
             if not access: return
 
             # Override/Inject safe data
             data['team_id'] = user['team_id']
             data['team_number'] = user['team_number']
-
-            database.execute(
-                'INSERT INTO messages (match_id, sender_team_id, content) VALUES (?, ?, ?)',
-                (match_id, user['team_id'], data['content'])
+            
+            # Fetch additional info for the broadcast
+            cur.execute(
+                'SELECT u.name as username, t.team_name '
+                'FROM users u JOIN teams t ON u.team_id = t.id '
+                'WHERE u.id = %s', (user_id,)
             )
+            user_info = cur.fetchone()
+            
+            data['username'] = user_info['username'] if user_info else None
+            data['team_name'] = user_info['team_name'] if user_info else ""
+            
+            msg_type = data.get('message_type', 'text')
+            media_url = data.get('media_url')
+            
+            # Use server-side UTC time for consistency
+            now = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+            data['timestamp'] = now
+
+            cur.execute(
+                'INSERT INTO messages (match_id, sender_team_id, sender_user_id, content, message_type, media_url, timestamp) '
+                'VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id',
+                (match_id, user['team_id'], user_id, data['content'], msg_type, media_url, now)
+            )
+            data['id'] = cur.fetchone()['id']
+            data['sender_user_id'] = user_id
+            
+            # Fetch creator_team_id for the UI
+            cur.execute('SELECT creator_team_id FROM matches WHERE id = %s', (match_id,))
+            creator = cur.fetchone()
+            data['creator_team_id'] = creator['creator_team_id'] if creator else None
+            
             database.commit()
             emit('message', data, room=room)
         finally:
@@ -989,20 +1095,23 @@ def create_app(test_config=None):
 
         room = str(match_id)
         database = get_db_for_socket()
+        cur = database.cursor()
         try:
             # Verify access
-            user = database.execute('SELECT team_id FROM users WHERE id = ?', (user_id,)).fetchone()
+            cur.execute('SELECT team_id FROM users WHERE id = %s', (user_id,))
+            user = cur.fetchone()
             if not user: return
             
-            access = database.execute(
-                'SELECT id FROM match_alliances WHERE match_id = ? AND team_id = ?',
+            cur.execute(
+                'SELECT id FROM match_alliances WHERE match_id = %s AND team_id = %s',
                 (match_id, user['team_id'])
-            ).fetchone()
+            )
+            access = cur.fetchone()
 
             if not access: return
 
-            database.execute(
-                'UPDATE drawings SET drawing_data_json = ?, last_updated = CURRENT_TIMESTAMP WHERE match_id = ? AND phase = ?',
+            cur.execute(
+                'UPDATE drawings SET drawing_data_json = %s, last_updated = CURRENT_TIMESTAMP WHERE match_id = %s AND phase = %s',
                 (data['drawing_data'], match_id, data['phase'])
             )
             database.commit()
@@ -1018,20 +1127,23 @@ def create_app(test_config=None):
 
         room = str(match_id)
         database = get_db_for_socket()
+        cur = database.cursor()
         try:
             # Verify access
-            user = database.execute('SELECT team_id FROM users WHERE id = ?', (user_id,)).fetchone()
+            cur.execute('SELECT team_id FROM users WHERE id = %s', (user_id,))
+            user = cur.fetchone()
             if not user: return
             
-            access = database.execute(
-                'SELECT id FROM match_alliances WHERE match_id = ? AND team_id = ?',
+            cur.execute(
+                'SELECT id FROM match_alliances WHERE match_id = %s AND team_id = %s',
                 (match_id, user['team_id'])
-            ).fetchone()
+            )
+            access = cur.fetchone()
 
             if not access: return
 
-            database.execute(
-                'UPDATE strategies SET text_content = ? WHERE match_id = ? AND phase = ?',
+            cur.execute(
+                'UPDATE strategies SET text_content = %s WHERE match_id = %s AND phase = %s',
                 (data['text_content'], match_id, data['phase'])
             )
             database.commit()

@@ -54,7 +54,7 @@ def create_app(test_config=None):
         pass
 
     db.init_app(app)
-    socketio.init_app(app, cors_allowed_origins="*")
+    socketio.init_app(app)
     mail.init_app(app)
 
     import traceback
@@ -512,7 +512,7 @@ def create_app(test_config=None):
             
             # Creator is always Red for now
             cur.execute(
-                'INSERT INTO match_alliances (match_id, team_id, alliance_color, last_seen) VALUES (%s, %s, %s, CURRENT_TIMESTAMP)',
+                'INSERT INTO match_alliances (match_id, team_id, alliance_color, last_seen, joined_at) VALUES (%s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)',
                 (match_id, g.user['team_id'], 'Red') 
             )
             
@@ -689,10 +689,16 @@ def create_app(test_config=None):
         cur.execute('UPDATE invites SET status = %s WHERE id = %s', (status, invite_id))
         
         if status == 'Accepted':
-            # Add to match alliances
+            # Add to match alliances, preventing duplicates
             cur.execute(
-                'INSERT INTO match_alliances (match_id, team_id, alliance_color, last_seen) VALUES (%s, %s, %s, CURRENT_TIMESTAMP)',
-                (invite['match_id'], g.user['team_id'], 'Blue') # Defaulting to Blue
+                '''
+                INSERT INTO match_alliances (match_id, team_id, alliance_color, last_seen, joined_at) 
+                SELECT %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM match_alliances WHERE match_id = %s AND team_id = %s
+                )
+                ''',
+                (invite['match_id'], g.user['team_id'], 'Blue', invite['match_id'], g.user['team_id'])
             )
         
         database.commit()
@@ -756,7 +762,8 @@ def create_app(test_config=None):
         )
         database.commit()
 
-        # Messages
+        # Messages - filter by joined_at for chat history isolation
+        # We use COALESCE and a default of 1970-01-01 to ensure creators/early joiners see everything
         cur.execute(
             '''
             SELECT m.id, m.sender_user_id, m.content, m.timestamp, t.team_number, t.team_name, u.name as username,
@@ -765,21 +772,27 @@ def create_app(test_config=None):
             JOIN teams t ON m.sender_team_id = t.id
             LEFT JOIN users u ON m.sender_user_id = u.id
             JOIN matches mt ON m.match_id = mt.id
-            WHERE m.match_id = %s
+            LEFT JOIN match_alliances ma_join ON m.match_id = ma_join.match_id AND ma_join.team_id = %s
+            WHERE m.match_id = %s 
+              AND (m.timestamp >= COALESCE(ma_join.joined_at, '1970-01-01') OR m.sender_team_id = %s)
             ORDER BY m.timestamp ASC
-            ''', (match_id,)
+            ''', (g.user['team_id'], match_id, g.user['team_id'])
         )
         messages = cur.fetchall()
         
         messages_list = []
         for m in messages:
             md = dict(m)
-            # Ensure timestamp is ISO with 'Z' for UTC
+            # Convert timestamp datetime object to ISO string for JSON
             ts = md.get('timestamp')
             if ts:
-                if ' ' in ts: ts = ts.replace(' ', 'T')
-                if not ts.endswith('Z'): ts += 'Z'
-                md['timestamp'] = ts
+                if hasattr(ts, 'isoformat'):
+                    # It's a datetime object from psycopg2
+                    md['timestamp'] = ts.strftime('%Y-%m-%dT%H:%M:%SZ')
+                elif isinstance(ts, str):
+                    ts = ts.replace(' ', 'T')
+                    if not ts.endswith('Z'): ts += 'Z'
+                    md['timestamp'] = ts
             messages_list.append(md)
 
         # Strategies
@@ -823,13 +836,31 @@ def create_app(test_config=None):
         )
         invites = cur.fetchall()
         
+        # Ensure all phases are present in the dictionaries
+        strategies_dict = {phase: '' for phase in ['Autonomous', 'Teleop', 'Endgame']}
+        for s in strategies:
+            strategies_dict[s['phase']] = s['text_content'] or ''
+            
+        drawings_dict = {phase: '[]' for phase in ['Autonomous', 'Teleop', 'Endgame']}
+        for d in drawings:
+            drawings_dict[d['phase']] = d['drawing_data_json'] or '[]'
+
+        def serialize_row(row):
+            """Convert a psycopg2 row to a JSON-safe dict."""
+            d = dict(row)
+            for k, v in d.items():
+                if hasattr(v, 'isoformat'):
+                    d[k] = v.strftime('%Y-%m-%dT%H:%M:%SZ')
+            return d
+
+        print(f"DEBUG: Match {match_id} data - Messages: {len(messages_list)}, Strategies: {len(strategies)}, Drawings: {len(drawings)}, Teams: {len(teams)}, Invites: {len(invites)}")
         return jsonify({
             'match_id': match_id,
             'messages': messages_list,
-            'strategies': {s['phase']: s['text_content'] for s in strategies},
-            'drawings': {d['phase']: d['drawing_data_json'] for d in drawings},
-            'teams': [dict(a) for a in teams],
-            'invites': [dict(i) for i in invites]
+            'strategies': strategies_dict,
+            'drawings': drawings_dict,
+            'teams': [serialize_row(a) for a in teams],
+            'invites': [serialize_row(i) for i in invites]
         })
 
     @app.route('/api/messages/<int:message_id>', methods=('DELETE',))
@@ -1111,8 +1142,13 @@ def create_app(test_config=None):
             if not access: return
 
             cur.execute(
-                'UPDATE drawings SET drawing_data_json = %s, last_updated = CURRENT_TIMESTAMP WHERE match_id = %s AND phase = %s',
-                (data['drawing_data'], match_id, data['phase'])
+                '''
+                INSERT INTO drawings (match_id, phase, drawing_data_json) 
+                VALUES (%s, %s, %s)
+                ON CONFLICT (match_id, phase) 
+                DO UPDATE SET drawing_data_json = EXCLUDED.drawing_data_json, last_updated = CURRENT_TIMESTAMP
+                ''',
+                (match_id, data['phase'], data['drawing_data'])
             )
             database.commit()
             emit('drawing_update', data, room=room, include_self=False)
@@ -1143,8 +1179,13 @@ def create_app(test_config=None):
             if not access: return
 
             cur.execute(
-                'UPDATE strategies SET text_content = %s WHERE match_id = %s AND phase = %s',
-                (data['text_content'], match_id, data['phase'])
+                '''
+                INSERT INTO strategies (match_id, phase, text_content) 
+                VALUES (%s, %s, %s)
+                ON CONFLICT (match_id, phase) 
+                DO UPDATE SET text_content = EXCLUDED.text_content
+                ''',
+                (match_id, data['phase'], data['strategy_text'])
             )
             database.commit()
             emit('strategy_update', data, room=room, include_self=False)

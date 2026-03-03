@@ -130,6 +130,23 @@ document.addEventListener('DOMContentLoaded', () => {
         invites: [],
     };
 
+    function restorePhase() {
+        try {
+            if (typeof MATCH_ID === 'undefined') return;
+            const savedPhase = localStorage.getItem(`frc_phase_${MATCH_ID}`);
+            if (savedPhase && ['Autonomous', 'Teleop', 'Endgame'].includes(savedPhase)) {
+                console.log("Restoring phase:", savedPhase);
+                state.phase = savedPhase;
+                const tabs = document.querySelectorAll('.phase-tab');
+                tabs.forEach(t => {
+                    t.classList.toggle('active', t.dataset.phase === state.phase);
+                });
+                const strategyEl = document.getElementById('strategy-text');
+                if (strategyEl) strategyEl.value = state.strategies[state.phase] || '';
+            }
+        } catch (e) { console.warn("Restore phase error:", e); }
+    }
+
     // DOM Elements
     const canvas = document.getElementById('field-canvas');
     const ctx = canvas.getContext('2d');
@@ -141,17 +158,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Socket Listeners ---
 
     socket.on('message', (msg) => {
+        // Prevent duplicates if already in state (though rare with this setup)
+        if (state.messages.some(m => m.id === msg.id)) return;
         state.messages.push(msg);
+
         const div = document.createElement('div');
         div.className = 'message';
         div.setAttribute('data-id', msg.id);
 
-        // Robust timestamp handling: 'Z' suffix on server ensures browser localizes it
-        let timestamp = new Date();
-        if (msg.timestamp) {
-            timestamp = new Date(msg.timestamp);
-        }
-
+        let timestamp = msg.timestamp ? new Date(msg.timestamp) : new Date();
         const timeStr = isNaN(timestamp.getTime()) ? 'Recently' : timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         const sender = msg.username || msg.team_number;
 
@@ -162,19 +177,26 @@ document.addEventListener('DOMContentLoaded', () => {
             contentHtml = `<div class="message-body"><video src="${msg.media_url}" controls style="max-width: 100%; border-radius: 8px; margin-top: 5px;"></video></div>`;
         }
 
-        const isSender = msg.sender_user_id === CURRENT_USER_ID;
-        const isCreator = msg.creator_team_id === CURRENT_TEAM_ID;
-        const deleteBtn = (isSender || isCreator) ? `<button class="delete-msg-btn" onclick="deleteMessage(${msg.id})" title="Delete Message">🗑️</button>` : '';
-
         div.innerHTML = `
             <div class="message-header">
                 <strong>${sender}</strong>
                 <span class="team-name">(${msg.team_name})</span>
-                ${deleteBtn}
             </div>
             ${contentHtml}
             <div class="message-time">${timeStr}</div>
         `;
+
+        const isSender = msg.sender_user_id === CURRENT_USER_ID;
+        const isCreator = msg.creator_team_id === CURRENT_TEAM_ID;
+        if (isSender || isCreator) {
+            const delBtn = document.createElement('button');
+            delBtn.className = 'delete-msg-btn';
+            delBtn.innerHTML = '🗑️';
+            delBtn.title = "Delete Message";
+            delBtn.addEventListener('click', () => deleteMessage(msg.id));
+            div.querySelector('.message-header').appendChild(delBtn);
+        }
+
         chatDiv.appendChild(div);
         chatDiv.scrollTop = chatDiv.scrollHeight;
     });
@@ -195,10 +217,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     socket.on('strategy_update', (data) => {
-        if (data.phase && data.text_content !== undefined) {
-            state.strategies[data.phase] = data.text_content;
+        if (data.phase && data.strategy_text !== undefined) {
+            state.strategies[data.phase] = data.strategy_text;
             if (data.phase === state.phase && document.activeElement !== strategyText) {
-                strategyText.value = data.text_content;
+                strategyText.value = data.strategy_text;
             }
         }
     });
@@ -263,6 +285,7 @@ document.addEventListener('DOMContentLoaded', () => {
         drawCanvas.style.cssText = `position: absolute; top: 0; left: 0; width: 100%; height: 100%; cursor: crosshair; z-index: 1000; pointer-events: all;`;
 
         canvasIsReady = true;
+        restorePhase();
         drawFieldImage();
         renderDrawings();
     }
@@ -288,15 +311,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     fieldImg.onload = () => {
-        console.log("Image load callback. Natural:", fieldImg.naturalWidth, fieldImg.naturalHeight);
+        console.log("Field image loaded successfully.");
         fieldImageLoaded = true;
-        // Natural image is horizontal (e.g. 1000x500)
-        // For Vertical 90deg view:
-        // Canvas Width = Image Natural Height
-        // Canvas Height = Image Natural Width
         const w = fieldImg.naturalHeight || 400;
         const h = fieldImg.naturalWidth || 800;
         resizeCanvases(w, h);
+    };
+
+    fieldImg.onerror = () => {
+        console.error("FAILED to load field image from:", fieldImg.src);
+        resizeCanvases(400, 800);
     };
 
     // Immediate fallback initialization
@@ -496,33 +520,46 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // API
     async function fetchData() {
+        console.log("Fetching match data...");
         try {
             const res = await fetch(`/api/matches/${MATCH_ID}/data`);
-            if (res.ok) {
-                const data = await res.json();
-                updateUI(data);
-                const statusEl = document.getElementById('connection-status');
-                if (statusEl) { statusEl.textContent = 'Connected (Live)'; statusEl.style.color = '#4ade80'; }
+            if (!res.ok) {
+                console.error("Match data fetch failed:", res.status);
+                return;
             }
+            const data = await res.json();
+            console.log("Match data received:", data);
+            updateUI(data);
+            const statusEl = document.getElementById('connection-status');
+            if (statusEl) { statusEl.textContent = 'Connected (Live)'; statusEl.style.color = '#4ade80'; }
         } catch (err) {
+            console.error("Fetch error:", err);
             const statusEl = document.getElementById('connection-status');
             if (statusEl) { statusEl.textContent = 'Disconnected'; statusEl.style.color = '#f87171'; }
         }
     }
 
     function updateUI(data) {
-        // --- Teams & Invites: always render first, independently of canvas ---
+        console.log("Updating UI with received data...");
+        // --- Teams & Invites ---
         try {
-            if (data.teams) { state.teams = data.teams; renderTeams(); }
+            if (data.teams) {
+                state.teams = data.teams;
+                renderTeams();
+            }
         } catch (e) { console.error('renderTeams error:', e); }
 
         try {
-            if (data.invites) { state.invites = data.invites; renderInvites(); }
+            if (data.invites) {
+                state.invites = data.invites;
+                renderInvites();
+            }
         } catch (e) { console.error('renderInvites error:', e); }
 
         // --- Chat Messages ---
         try {
             if (data.messages) {
+                // Merge instead of simple overwrite to avoid flickering/loss during race conditions
                 state.messages = data.messages;
                 chatDiv.innerHTML = '';
                 state.messages.forEach(msg => {
@@ -543,15 +580,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     const isSender = msg.sender_user_id === CURRENT_USER_ID;
                     const isCreator = msg.creator_team_id === CURRENT_TEAM_ID;
-                    // Use addEventListener on delete button (inline onclick blocked by Chrome CSP)
-                    const msgDiv = div;
                     div.innerHTML = `<div class="message-header"><strong>${sender}</strong> <span>(${msg.team_name})</span></div>${contentHtml}<div class="message-time">${timeStr}</div>`;
                     if (isSender || isCreator) {
                         const delBtn = document.createElement('button');
                         delBtn.className = 'delete-msg-btn';
                         delBtn.textContent = '🗑️';
                         delBtn.addEventListener('click', () => deleteMessage(msg.id));
-                        msgDiv.querySelector('.message-header').appendChild(delBtn);
+                        div.querySelector('.message-header').appendChild(delBtn);
                     }
                     chatDiv.appendChild(div);
                 });
@@ -561,41 +596,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // --- Strategy ---
         try {
-            if (data.strategies) state.strategies = data.strategies;
-            if (strategyText && document.activeElement !== strategyText) strategyText.value = state.strategies[state.phase] || '';
+            if (data.strategies) {
+                // Merge strategies
+                for (const [phase, content] of Object.entries(data.strategies)) {
+                    state.strategies[phase] = content || '';
+                }
+            }
+            if (strategyText && document.activeElement !== strategyText) {
+                strategyText.value = state.strategies[state.phase] || '';
+            }
         } catch (e) { console.error('strategy render error:', e); }
 
         // --- Drawings: isolated so canvas errors never block above sections ---
         try {
             if (data.drawings) {
-                // Initialize default arrays first for safety
-                ['Autonomous', 'Teleop', 'Endgame'].forEach(phase => {
-                    if (!state.drawingData[phase]) {
-                        state.drawingData[phase] = [];
-                    }
-                });
-
                 for (const [phase, json] of Object.entries(data.drawings)) {
                     if (json) {
                         try {
                             let parsed = JSON.parse(json);
-                            if (!Array.isArray(parsed)) parsed = [];
-                            state.drawingData[phase] = parsed;
+                            if (Array.isArray(parsed)) {
+                                state.drawingData[phase] = parsed;
+                            }
                         } catch (e) {
-                            state.drawingData[phase] = [];
+                            console.error(`Error parsing drawing data for phase ${phase}:`, e);
                         }
                     } else {
-                        state.drawingData[phase] = [];
+                        state.drawingData[phase] = state.drawingData[phase] || [];
                     }
                 }
                 renderDrawings();
-            } else {
-                // If data.drawings is missing entirely, ensure initialization
-                ['Autonomous', 'Teleop', 'Endgame'].forEach(phase => {
-                    if (!state.drawingData[phase]) {
-                        state.drawingData[phase] = [];
-                    }
-                });
             }
         } catch (e) { console.error('renderDrawings error:', e); }
     }
@@ -649,24 +678,36 @@ document.addEventListener('DOMContentLoaded', () => {
             div.style.border = '1px solid rgba(255,255,255,0.05)';
 
             const isReceived = Number(invite.to_team_number) === Number(CURRENT_TEAM_NUMBER);
-            const isSent = Number(invite.from_team_number) === Number(CURRENT_TEAM_NUMBER);
+
+            let actionsHtml = '';
+            if (isReceived) {
+                actionsHtml = `
+                    <div class="invite-actions" style="display: flex; gap: 0.4rem;">
+                        <button class="btn btn-accept-invite" style="padding: 0.3rem 0.6rem; font-size: 0.7rem;">Accept</button>
+                        <button class="btn btn-secondary btn-decline-invite" style="padding: 0.3rem 0.6rem; font-size: 0.7rem;">Decline</button>
+                    </div>
+                `;
+            } else {
+                actionsHtml = `
+                    <div style="display: flex; align-items: center; gap: 5px; color: var(--accent); font-weight: 600; font-size: 0.7rem;">
+                        <span class="pulse" style="width: 6px; height: 6px; background: var(--accent); border-radius: 50%;"></span>
+                        Pending...
+                    </div>
+                `;
+            }
 
             div.innerHTML = `
                 <div style="margin-bottom: 0.4rem;">
                     <strong>Team ${invite.from_team_number}</strong> → <strong>Team ${invite.to_team_number}</strong>
                 </div>
-                ${isReceived ? `
-                    <div class="invite-actions" style="display: flex; gap: 0.4rem;">
-                        <button onclick="respondToInvite(${invite.id}, 'Accepted')" class="btn" style="padding: 0.3rem 0.6rem; font-size: 0.7rem;">Accept</button>
-                        <button onclick="respondToInvite(${invite.id}, 'Declined')" class="btn btn-secondary" style="padding: 0.3rem 0.6rem; font-size: 0.7rem;">Decline</button>
-                    </div>
-                ` : `
-                    <div style="display: flex; align-items: center; gap: 5px; color: var(--accent); font-weight: 600; font-size: 0.7rem;">
-                        <span class="pulse" style="width: 6px; height: 6px; background: var(--accent); border-radius: 50%;"></span>
-                        Pending...
-                    </div>
-                `}
+                ${actionsHtml}
             `;
+
+            if (isReceived) {
+                div.querySelector('.btn-accept-invite').addEventListener('click', () => respondToInvite(invite.id, 'Accepted'));
+                div.querySelector('.btn-decline-invite').addEventListener('click', () => respondToInvite(invite.id, 'Declined'));
+            }
+
             invitesListDiv.appendChild(div);
         });
         invitesListDiv.scrollTop = invitesListDiv.scrollHeight;
@@ -684,7 +725,7 @@ document.addEventListener('DOMContentLoaded', () => {
         socket.emit('update_strategy', {
             match_id: MATCH_ID,
             phase: state.phase,
-            text_content: strategyText.value
+            strategy_text: strategyText.value
         });
 
         if (isManual) {
@@ -825,6 +866,8 @@ document.addEventListener('DOMContentLoaded', () => {
             document.querySelectorAll('.phase-tab').forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
             state.phase = tab.dataset.phase;
+            localStorage.setItem(`frc_phase_${MATCH_ID}`, state.phase);
+            console.log("Phase switched to:", state.phase);
             if (strategyText) strategyText.value = state.strategies[state.phase] || '';
             renderDrawings();
         };
@@ -860,6 +903,7 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 
+    restorePhase();
     fetchData();
     setInterval(fetchData, 10000);
 });

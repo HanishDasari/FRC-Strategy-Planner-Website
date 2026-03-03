@@ -53,7 +53,8 @@ CREATE TABLE match_alliances (
     match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
     team_id INTEGER NOT NULL REFERENCES teams(id),
     alliance_color TEXT NOT NULL, -- 'Red', 'Blue'
-    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE invites (

@@ -17,6 +17,35 @@
     --transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+.site-footer {
+    text-align: center;
+    padding: 2rem 1rem;
+    margin-top: 4rem;
+    border-top: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+}
+
+.copyright {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    opacity: 0.8;
+}
+
+.copyright-logo {
+    height: 20px;
+    width: auto;
+    filter: grayscale(1) brightness(0.8);
+    transition: var(--transition);
+}
+
+.copyright:hover .copyright-logo {
+    filter: grayscale(0) brightness(1);
+    transform: scale(1.1);
+}
+
 body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
     background-color: var(--bg-color);

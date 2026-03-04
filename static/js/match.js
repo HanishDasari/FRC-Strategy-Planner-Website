@@ -907,12 +907,41 @@ document.addEventListener('DOMContentLoaded', () => {
 
         inviteForm.onsubmit = async (e) => {
             e.preventDefault();
-            const res = await fetch('/api/invites', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ match_id: MATCH_ID, to_team_number: e.target.elements['team_number'].value })
-            });
-            if (res.ok) { e.target.reset(); statusSpan.textContent = ''; fetchData(); }
+            const submitBtn = inviteForm.querySelector('button[type="submit"]');
+            const originalBtnText = submitBtn.textContent;
+
+            submitBtn.disabled = true;
+            submitBtn.textContent = '...';
+
+            try {
+                const res = await fetch('/api/invites', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        match_id: MATCH_ID,
+                        to_team_number: e.target.elements['team_number'].value
+                    })
+                });
+
+                if (res.ok) {
+                    e.target.reset();
+                    statusSpan.textContent = 'Invite sent!';
+                    statusSpan.style.color = '#4ade80';
+                    fetchData();
+                    setTimeout(() => { if (statusSpan.textContent === 'Invite sent!') statusSpan.textContent = ''; }, 3000);
+                } else {
+                    const data = await res.json();
+                    alert(data.error || 'Failed to send invite');
+                    statusSpan.textContent = data.error || 'Failed';
+                    statusSpan.style.color = '#f87171';
+                }
+            } catch (err) {
+                console.error(err);
+                alert('Connection error. Failed to send invite.');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalBtnText;
+            }
         };
     }
 

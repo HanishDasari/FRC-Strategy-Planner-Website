@@ -45,13 +45,15 @@ CREATE TABLE matches (
     id SERIAL PRIMARY KEY,
     match_number INTEGER NOT NULL,
     match_type TEXT NOT NULL, -- 'Qualification', 'Elimination'
-    creator_team_id INTEGER NOT NULL REFERENCES teams(id)
+    creator_team_id INTEGER NOT NULL REFERENCES teams(id),
+    creator_user_id INTEGER REFERENCES users(id)
 );
 
 CREATE TABLE match_alliances (
     id SERIAL PRIMARY KEY,
     match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
     team_id INTEGER NOT NULL REFERENCES teams(id),
+    user_id INTEGER REFERENCES users(id),
     alliance_color TEXT NOT NULL, -- 'Red', 'Blue'
     last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -62,6 +64,7 @@ CREATE TABLE invites (
     match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
     from_team_id INTEGER NOT NULL REFERENCES teams(id),
     to_team_id INTEGER NOT NULL REFERENCES teams(id),
+    from_user_id INTEGER REFERENCES users(id),
     status TEXT NOT NULL DEFAULT 'Pending', -- 'Pending', 'Accepted', 'Declined'
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

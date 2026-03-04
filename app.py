@@ -53,8 +53,41 @@ def create_app(test_config=None):
 
     db.init_app(app)
     socketio.init_app(app)
-    # Resend API Setup
-    resend.api_key = os.environ.get('RESEND_API_KEY')
+    
+    # --- Database Initialization ---
+    with app.app_context():
+        try:
+            database = db.get_db()
+            cur = database.cursor()
+            # Check if users table exists
+            cur.execute("SELECT 1 FROM information_schema.tables WHERE table_name = 'users'")
+            if not cur.fetchone():
+                print("[APP INIT] Tables missing. Initializing database...")
+                db.init_db()
+                print("[APP INIT] Database initialized successfully.")
+            
+            # Match alliances migrations
+            try:
+                cur.execute("ALTER TABLE matches ADD COLUMN IF NOT EXISTS creator_user_id INTEGER REFERENCES users(id)")
+                cur.execute("ALTER TABLE match_alliances ADD COLUMN IF NOT EXISTS creator_user_id INTEGER REFERENCES users(id)")
+                cur.execute("ALTER TABLE match_alliances ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id)")
+                # Invites table migration
+                cur.execute("ALTER TABLE invites ADD COLUMN IF NOT EXISTS from_user_id INTEGER REFERENCES users(id)")
+                database.commit()
+                print("Database migrations (matches, match_alliances & invites) applied successfully.")
+            except Exception as inner_e:
+                database.rollback()
+                print(f"Migration notice (already applied or minor error): {inner_e}")
+
+        except Exception as e:
+            print(f"[APP INIT] Error checking/initializing database: {e}")
+
+    # Brevo API Setup
+    import sib_api_v3_sdk
+    from sib_api_v3_sdk.rest import ApiException
+    configuration = sib_api_v3_sdk.Configuration()
+    configuration.api_key['api-key'] = os.environ.get('BREVO_API_KEY')
+    api_instance = sib_api_v3_sdk.TransactionalEmailsApi(sib_api_v3_sdk.ApiClient(configuration))
 
     import traceback
     @app.errorhandler(500)
@@ -116,27 +149,20 @@ def create_app(test_config=None):
                                current_team_id=g.user['team_id'],
                                current_team_number=g.user['team_number'])
 
-    def send_async_email(params):
-        try:
-            resend.Emails.send(params)
-        except Exception as e:
-            print(f"Error sending async email: {e}")
-
     def send_email(subject, recipient, body):
-        # We use a default sender if not configured. 
-        # Note: Resend requires a verified domain or "onboarding@resend.dev"
-        sender = os.environ.get('MAIL_USERNAME') or "onboarding@resend.dev"
-        params = {
-            "from": f"FRC Strategy <{sender}>",
-            "to": [recipient],
-            "subject": subject,
-            "text": body,
-        }
-        
-        # Send in background thread to prevent UI hang
-        thr = threading.Thread(target=send_async_email, args=[params])
-        thr.start()
-        return True
+        sender_email = os.environ.get('MAIL_USERNAME') or "hanishdasari007@gmail.com"
+        send_smtp_email = sib_api_v3_sdk.SendSmtpEmail(
+            to=[{"email": recipient}],
+            sender={"name": "FRC Strategy Planner", "email": sender_email},
+            subject=subject,
+            text_content=body
+        )
+        try:
+            api_instance.send_transac_email(send_smtp_email)
+            return True
+        except ApiException as e:
+            print(f"Exception when calling TransactionalEmailsApi->send_transac_email: {e}")
+            return False
 
     # Auth Utilities
     def validate_password(password):

@@ -404,24 +404,81 @@ async function respondInvite(id, status) {
     }
 }
 
-async function deleteMatch(id) {
-    if (!confirm('Are you sure you want to delete this match? This will permanently remove all strategy notes, drawings, and chat messages.')) {
-        return;
+// Custom Delete Match Modal Logic
+let matchIdToDelete = null;
+
+function deleteMatch(matchId) {
+    matchIdToDelete = matchId;
+    const modal = document.getElementById('delete-modal');
+    if (modal) {
+        modal.classList.remove('hidden');
+    } else if (confirm('Are you sure you want to delete this match?')) {
+        executeDelete(matchId);
     }
+}
 
+async function executeDelete(matchId) {
     try {
-        const res = await fetch(`/api/matches/${id}`, {
-            method: 'DELETE'
-        });
-
+        const res = await fetch(`/api/matches/${matchId}`, { method: 'DELETE' });
         if (res.ok) {
-            loadMatches();
+            if (window.location.pathname === '/dashboard') {
+                loadMatches();
+            } else {
+                window.location.href = '/dashboard';
+            }
         } else {
             const data = await res.json();
             alert(data.error || 'Failed to delete match');
         }
     } catch (err) {
         console.error(err);
-        alert('An error occurred while deleting the match');
+        alert('Error deleting match');
     }
 }
+
+// Global modal event listeners
+document.addEventListener('DOMContentLoaded', () => {
+    const cancelBtn = document.getElementById('cancel-delete');
+    const confirmBtn = document.getElementById('confirm-delete');
+    const modal = document.getElementById('delete-modal');
+
+    if (cancelBtn) {
+        cancelBtn.onclick = () => {
+            modal.classList.add('hidden');
+            matchIdToDelete = null;
+        };
+    }
+
+    if (confirmBtn) {
+        confirmBtn.onclick = async () => {
+            if (matchIdToDelete) {
+                confirmBtn.disabled = true;
+                const originalText = confirmBtn.textContent;
+                confirmBtn.textContent = '...';
+
+                await executeDelete(matchIdToDelete);
+
+                confirmBtn.disabled = false;
+                confirmBtn.textContent = originalText;
+                modal.classList.add('hidden');
+                matchIdToDelete = null;
+            }
+        };
+    }
+
+    // Close on outside click
+    if (modal) {
+        modal.onclick = (e) => {
+            if (e.target === modal) {
+                modal.classList.add('hidden');
+                matchIdToDelete = null;
+            }
+        };
+    }
+
+    // Auto-init dashboard if on the right page
+    if (window.location.pathname === '/dashboard') {
+        loadMatches();
+        loadInvites();
+    }
+});

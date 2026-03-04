@@ -750,6 +750,77 @@ h3 {
     }
 }
 
+/* Custom Modal Styles */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.8);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 2000;
+    backdrop-filter: blur(4px);
+}
+
+.modal.hidden {
+    display: none;
+}
+
+.modal-content {
+    background: var(--card-bg);
+    padding: 2rem;
+    border-radius: 12px;
+    max-width: 400px;
+    width: 90%;
+    text-align: center;
+    border: 1px solid var(--border);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+}
+
+.modal-content h3 {
+    margin-top: 0;
+    font-size: 1.5rem;
+    color: var(--text);
+}
+
+.modal-content p {
+    color: var(--text-secondary);
+    margin: 1rem 0 2rem 0;
+}
+
+.modal-actions {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+}
+
+.modal-actions .btn-secondary,
+.modal-actions .btn-danger {
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+}
+
+.modal-actions .btn-secondary {
+    background: var(--bg-accent);
+    color: var(--text);
+}
+
+.modal-actions .btn-danger {
+    background: #ef4444;
+    color: white;
+}
+
+.modal-actions button:hover {
+    opacity: 0.9;
+    transform: translateY(-2px);
+}
+
 @media (max-width: 768px) {
     .auth-container {
         margin: 2rem auto;

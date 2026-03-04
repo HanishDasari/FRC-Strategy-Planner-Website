@@ -30,7 +30,6 @@ def create_app(test_config=None):
         MAX_CONTENT_LENGTH=16 * 1024 * 1024, # 16MB limit
         # MAIL_* configs removed for Resend API
         MAIL_DEFAULT_SENDER=os.environ.get('MAIL_USERNAME'),
-        MAIL_DEFAULT_SENDER=os.environ.get('MAIL_USERNAME'),
         SESSION_COOKIE_SAMESITE='Lax',
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SECURE=False, # Required for HTTP

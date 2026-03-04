@@ -8,3 +8,4 @@ psycopg2-binary
 gunicorn
 eventlet
 resend
+sib-api-v3-sdk

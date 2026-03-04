@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 from flask import Flask, render_template, request, redirect, url_for, flash, session, g, jsonify, current_app
 from flask_socketio import SocketIO, emit, join_room, leave_room
-from flask_mail import Mail, Message
+import resend
 from werkzeug.security import generate_password_hash, check_password_hash
 import db
 import uuid
@@ -15,7 +15,7 @@ import socket
 import threading
 
 socketio = SocketIO()
-mail = Mail()
+
 
 def create_app(test_config=None):
     # Allow OAuth over HTTP for development (required for WiFi access/nip.io)
@@ -28,12 +28,8 @@ def create_app(test_config=None):
         DATABASE_URL=os.environ.get('DATABASE_URL'),
         UPLOAD_FOLDER=os.path.join(app.root_path, 'static', 'uploads'),
         MAX_CONTENT_LENGTH=16 * 1024 * 1024, # 16MB limit
-        MAIL_SERVER='smtp.gmail.com',
-        MAIL_PORT=465,
-        MAIL_USE_SSL=True,
-        MAIL_USE_TLS=False,
-        MAIL_USERNAME=os.environ.get('MAIL_USERNAME'),
-        MAIL_PASSWORD=os.environ.get('MAIL_PASSWORD'),
+        # MAIL_* configs removed for Resend API
+        MAIL_DEFAULT_SENDER=os.environ.get('MAIL_USERNAME'),
         MAIL_DEFAULT_SENDER=os.environ.get('MAIL_USERNAME'),
         SESSION_COOKIE_SAMESITE='Lax',
         SESSION_COOKIE_HTTPONLY=True,
@@ -57,7 +53,8 @@ def create_app(test_config=None):
 
     db.init_app(app)
     socketio.init_app(app)
-    mail.init_app(app)
+    # Resend API Setup
+    resend.api_key = os.environ.get('RESEND_API_KEY')
 
     import traceback
     @app.errorhandler(500)
@@ -119,22 +116,27 @@ def create_app(test_config=None):
                                current_team_id=g.user['team_id'],
                                current_team_number=g.user['team_number'])
 
-    def send_async_email(app, msg):
-        with app.app_context():
-            try:
-                mail.send(msg)
-            except Exception as e:
-                print(f"Error sending async email: {e}")
+    def send_async_email(params):
+        try:
+            resend.Emails.send(params)
+        except Exception as e:
+            print(f"Error sending async email: {e}")
 
     def send_email(subject, recipient, body):
-        app = current_app._get_current_object()
-        msg = Message(subject, recipients=[recipient], sender=app.config['MAIL_USERNAME'])
-        msg.body = body
+        # We use a default sender if not configured. 
+        # Note: Resend requires a verified domain or "onboarding@resend.dev"
+        sender = os.environ.get('MAIL_USERNAME') or "onboarding@resend.dev"
+        params = {
+            "from": f"FRC Strategy <{sender}>",
+            "to": [recipient],
+            "subject": subject,
+            "text": body,
+        }
         
         # Send in background thread to prevent UI hang
-        thr = threading.Thread(target=send_async_email, args=[app, msg])
+        thr = threading.Thread(target=send_async_email, args=[params])
         thr.start()
-        return True # Return true immediately so UI doesn't hang
+        return True
 
     # Auth Utilities
     def validate_password(password):

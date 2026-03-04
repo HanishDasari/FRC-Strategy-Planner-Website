@@ -48,7 +48,6 @@
 
         .panel-content {
             padding: 1rem;
-            overflow-y: visible;
             position: relative;
         }
 
@@ -68,6 +67,38 @@
             box-shadow: 0 0 0 1px var(--border);
             max-width: 100%;
             height: auto;
+        }
+
+        /* Bottom Grid Responsiveness */
+        .bottom-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+        }
+
+        @media (max-width: 900px) {
+            .match-container {
+                padding: 1rem;
+                gap: 1rem;
+            }
+
+            .bottom-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 600px) {
+            .dashboard-header {
+                flex-wrap: wrap;
+                gap: 0.5rem;
+            }
+
+            .phase-tabs {
+                order: 3;
+                width: 100%;
+                max-width: none !important;
+                margin-top: 0.5rem;
+            }
         }
     </style>
 </head>
@@ -112,8 +143,8 @@
                     style="padding: 4px 12px; font-size: 0.75rem;">Clear All</button>
             </div>
             <div class="panel-content"
-                style="display: flex; align-items: center; justify-content: center; min-height: 400px; padding: 2rem 0;">
-                <canvas id="field-canvas" width="600" height="300"></canvas>
+                style="display: flex; align-items: center; justify-content: center; padding: 1rem 0; overflow: hidden;">
+                <canvas id="field-canvas" width="800" height="400"></canvas>
             </div>
             <div class="color-picker"
                 style="padding: 15px; display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; align-items: center; background: rgba(0,0,0,0.2); border-top: 1px solid var(--border);">
@@ -149,8 +180,8 @@
             </div>
         </div>
 
-        <!-- Alliance and Strategy Grid (Horizontal split for side-by-side but vertical in flow) -->
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+        <!-- Alliance and Strategy Grid -->
+        <div class="bottom-grid">
             <!-- Teams Panel -->
             <div class="panel">
                 <div class="panel-header">Alliances</div>

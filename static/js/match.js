@@ -181,9 +181,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const fieldCtx = fieldCanvas.getContext('2d');
 
-    // Dynamic dimensions (Vertical Orientation)
-    let CANVAS_W = 400;
-    let CANVAS_H = 800;
+    // Dynamic dimensions (Horizontal Orientation)
+    let CANVAS_W = 800;
+    let CANVAS_H = 400;
     let fieldImageLoaded = false;
     let canvasIsReady = false;
 
@@ -236,13 +236,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!fieldCtx) return;
         fieldCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
         if (fieldImageLoaded) {
-            // VERTICAL VIEW (rotated 90deg)
-            fieldCtx.save();
-            fieldCtx.translate(0, CANVAS_H);
-            fieldCtx.rotate(-Math.PI / 2);
-            // Swapping W/H in drawImage because of rotation
-            fieldCtx.drawImage(fieldImg, 0, 0, CANVAS_H, CANVAS_W);
-            fieldCtx.restore();
+            // HORIZONTAL VIEW
+            fieldCtx.drawImage(fieldImg, 0, 0, CANVAS_W, CANVAS_H);
         } else {
             fieldCtx.fillStyle = '#111';
             fieldCtx.fillRect(0, 0, CANVAS_W, CANVAS_H);
@@ -252,21 +247,21 @@ document.addEventListener('DOMContentLoaded', () => {
     fieldImg.onload = () => {
         console.log("Field image loaded successfully.");
         fieldImageLoaded = true;
-        const w = fieldImg.naturalHeight || 400;
-        const h = fieldImg.naturalWidth || 800;
+        const w = fieldImg.naturalWidth || 800;
+        const h = fieldImg.naturalHeight || 400;
         resizeCanvases(w, h);
     };
 
     fieldImg.onerror = () => {
         console.error("FAILED to load field image from:", fieldImg.src);
-        resizeCanvases(400, 800);
+        resizeCanvases(800, 400);
     };
 
     // Immediate fallback initialization
     if (fieldImg.complete && fieldImg.naturalWidth > 0) {
         fieldImg.onload();
     } else {
-        resizeCanvases(400, 800);
+        resizeCanvases(800, 400);
     }
 
     function renderDrawings() {

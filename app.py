@@ -61,9 +61,9 @@ def create_app(test_config=None):
             # Check if users table exists
             cur.execute("SELECT 1 FROM information_schema.tables WHERE table_name = 'users'")
             if not cur.fetchone():
-                print("[APP INIT] Tables missing. Initializing database...")
-                db.init_db()
-                print("[APP INIT] Database initialized successfully.")
+                print("[APP INIT] Tables missing. Please run 'flask init-db' if this is a new setup.")
+                # Removed dangerous auto-init that was wiping data on slow connections
+                # db.init_db() 
             
             # Match alliances migrations
             try:
@@ -116,6 +116,7 @@ def create_app(test_config=None):
     @app.before_request
     def load_logged_in_user():
         user_id = session.get('user_id')
+        print(f"[AUTH DEBUG] Loaded user_id from session: {user_id}")
 
         if user_id is None:
             g.user = None
@@ -132,7 +133,7 @@ def create_app(test_config=None):
 
     @app.route('/')
     def index():
-        if g.user and g.user['is_verified']:
+        if g.user:
             return redirect(url_for('dashboard'))
         return render_template('index.html')
 

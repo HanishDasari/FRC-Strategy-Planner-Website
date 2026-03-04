@@ -12,6 +12,7 @@ import random
 import string
 from datetime import datetime, timedelta
 import socket
+import threading
 
 socketio = SocketIO()
 mail = Mail()
@@ -28,8 +29,9 @@ def create_app(test_config=None):
         UPLOAD_FOLDER=os.path.join(app.root_path, 'static', 'uploads'),
         MAX_CONTENT_LENGTH=16 * 1024 * 1024, # 16MB limit
         MAIL_SERVER='smtp.gmail.com',
-        MAIL_PORT=587,
-        MAIL_USE_TLS=True,
+        MAIL_PORT=465,
+        MAIL_USE_SSL=True,
+        MAIL_USE_TLS=False,
         MAIL_USERNAME=os.environ.get('MAIL_USERNAME'),
         MAIL_PASSWORD=os.environ.get('MAIL_PASSWORD'),
         MAIL_DEFAULT_SENDER=os.environ.get('MAIL_USERNAME'),
@@ -117,15 +119,22 @@ def create_app(test_config=None):
                                current_team_id=g.user['team_id'],
                                current_team_number=g.user['team_number'])
 
+    def send_async_email(app, msg):
+        with app.app_context():
+            try:
+                mail.send(msg)
+            except Exception as e:
+                print(f"Error sending async email: {e}")
+
     def send_email(subject, recipient, body):
-        msg = Message(subject, recipients=[recipient], sender=current_app.config['MAIL_USERNAME'])
+        app = current_app._get_current_object()
+        msg = Message(subject, recipients=[recipient], sender=app.config['MAIL_USERNAME'])
         msg.body = body
-        try:
-            mail.send(msg)
-            return True
-        except Exception as e:
-            print(f"Error sending email: {e}")
-            return False
+        
+        # Send in background thread to prevent UI hang
+        thr = threading.Thread(target=send_async_email, args=[app, msg])
+        thr.start()
+        return True # Return true immediately so UI doesn't hang
 
     # Auth Utilities
     def validate_password(password):

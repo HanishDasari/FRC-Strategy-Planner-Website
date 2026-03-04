@@ -136,7 +136,7 @@ def create_app(test_config=None):
 
     @app.route('/')
     def index():
-        if g.user:
+        if g.user and g.user['is_verified']:
             return redirect(url_for('dashboard'))
         return render_template('index.html')
 

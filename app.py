@@ -110,10 +110,6 @@ def create_app(test_config=None):
         def wrapped_view(**kwargs):
             if g.user is None:
                 return redirect(url_for('index'))
-            if not g.user['is_verified']:
-                session['pending_verification_user_id'] = g.user['id']
-                flash("Your account is not verified. Please enter the verification code.")
-                return redirect(url_for('verify_email_page'))
             return view(**kwargs)
         return wrapped_view
 
@@ -346,29 +342,6 @@ def create_app(test_config=None):
         user = cur.fetchone()
 
         if user and user['password_hash'] and check_password_hash(user['password_hash'], password):
-            if not user['is_verified']:
-                session['pending_verification_user_id'] = user['id']
-                
-                # Generate and send verification code to user
-                code = ''.join(random.choices(string.digits, k=6))
-                expires_at = datetime.utcnow() + timedelta(minutes=15)
-                
-                cur.execute('DELETE FROM email_verifications WHERE user_id = %s', (user['id'],))
-                cur.execute(
-                    'INSERT INTO email_verifications (user_id, code, expires_at) VALUES (%s, %s, %s)',
-                    (user['id'], code, expires_at)
-                )
-                database.commit()
-                
-                email_body = f"Hello,\n\nYour verification code for login is: {code}\n\nThis code will expire in 15 minutes."
-                if send_email("Login Verification Code", user['email'], email_body):
-                    flash("Please enter the verification code sent to your email.")
-                else:
-                    flash("There was an error sending the verification email. Please try again later.")
-                    print(f"\n--- EMAIL VERIFICATION ERROR (Login) ---\nUser: {user['email']}\nCode: {code}\n---------------------------------------\n")
-                
-                return redirect(url_for('verify_email_page'))
-                
             session.clear()
             session['user_id'] = user['id']
             return redirect(url_for('dashboard'))
@@ -862,39 +835,6 @@ def create_app(test_config=None):
         )
         database.commit()
 
-        # Messages - filter by joined_at for chat history isolation
-        # We use COALESCE and a default of 1970-01-01 to ensure creators/early joiners see everything
-        cur.execute(
-            '''
-            SELECT m.id, m.sender_user_id, m.content, m.timestamp, t.team_number, t.team_name, u.name as username,
-                   m.message_type, m.media_url, mt.creator_team_id
-            FROM messages m
-            JOIN teams t ON m.sender_team_id = t.id
-            LEFT JOIN users u ON m.sender_user_id = u.id
-            JOIN matches mt ON m.match_id = mt.id
-            LEFT JOIN match_alliances ma_join ON m.match_id = ma_join.match_id AND ma_join.team_id = %s
-            WHERE m.match_id = %s 
-              AND (m.timestamp >= COALESCE(ma_join.joined_at, '1970-01-01') OR m.sender_team_id = %s)
-            ORDER BY m.timestamp ASC
-            ''', (g.user['team_id'], match_id, g.user['team_id'])
-        )
-        messages = cur.fetchall()
-        
-        messages_list = []
-        for m in messages:
-            md = dict(m)
-            # Convert timestamp datetime object to ISO string for JSON
-            ts = md.get('timestamp')
-            if ts:
-                if hasattr(ts, 'isoformat'):
-                    # It's a datetime object from psycopg2
-                    md['timestamp'] = ts.strftime('%Y-%m-%dT%H:%M:%SZ')
-                elif isinstance(ts, str):
-                    ts = ts.replace(' ', 'T')
-                    if not ts.endswith('Z'): ts += 'Z'
-                    md['timestamp'] = ts
-            messages_list.append(md)
-
         # Strategies
         cur.execute(
             'SELECT phase, text_content FROM strategies WHERE match_id = %s',
@@ -956,100 +896,11 @@ def create_app(test_config=None):
         print(f"DEBUG: Match {match_id} data - Messages: {len(messages_list)}, Strategies: {len(strategies)}, Drawings: {len(drawings)}, Teams: {len(teams)}, Invites: {len(invites)}")
         return jsonify({
             'match_id': match_id,
-            'messages': messages_list,
             'strategies': strategies_dict,
             'drawings': drawings_dict,
             'teams': [serialize_row(a) for a in teams],
             'invites': [serialize_row(i) for i in invites]
         })
-
-    @app.route('/api/messages/<int:message_id>', methods=('DELETE',))
-    @login_required
-    def delete_message(message_id):
-        database = db.get_db()
-        cur = database.cursor()
-        cur.execute(
-            'SELECT m.*, mt.creator_team_id '
-            'FROM messages m '
-            'JOIN matches mt ON m.match_id = mt.id '
-            'WHERE m.id = %s', (message_id,)
-        )
-        message = cur.fetchone()
-
-        if not message:
-            return jsonify({'error': 'Message not found'}), 404
-
-        # Check permission: Only sender or match creator can delete
-        is_sender = message['sender_user_id'] == session.get('user_id')
-        is_creator = message['creator_team_id'] == g.user['team_id']
-
-        if not (is_sender or is_creator):
-            return jsonify({'error': 'Unauthorized'}), 401
-
-        # Delete media file if it exists
-        if message['media_url']:
-            # Extract filename from URL (e.g., /static/uploads/filename.jpg)
-            parts = message['media_url'].split('/')
-            if len(parts) > 0:
-                filename = parts[-1]
-                file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-                if os.path.exists(file_path):
-                    try:
-                        os.remove(file_path)
-                    except Exception as e:
-                        print(f"Error deleting file {file_path}: {e}")
-
-        cur.execute('DELETE FROM messages WHERE id = %s', (message_id,))
-        database.commit()
-
-        # Broadcast deletion to the match room
-        socketio.emit('message_deleted', {'id': message_id}, room=str(message['match_id']))
-
-        return '', 204
-
-    @app.route('/api/upload', methods=['POST'])
-    @login_required
-    def upload_file():
-        if 'file' not in request.files:
-            return jsonify({'error': 'No file part'}), 400
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({'error': 'No selected file'}), 400
-        
-        if file:
-            filename = str(uuid.uuid4()) + "_" + file.filename
-            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(file_path)
-            
-            # Determine type
-            ext = filename.split('.')[-1].lower()
-            msg_type = 'image' if ext in ['jpg', 'jpeg', 'png', 'gif', 'webp'] else 'video' if ext in ['mp4', 'webm', 'mov'] else 'text'
-            
-            return jsonify({
-                'url': url_for('static', filename='uploads/' + filename),
-                'type': msg_type
-            })
-        return jsonify({'error': 'Upload failed'}), 500
-
-    @app.route('/api/matches/<int:match_id>/messages', methods=('POST',))
-    @login_required
-    def post_message(match_id):
-        data = request.get_json()
-        content = data.get('content')
-        
-        if not content:
-            return jsonify({'error': 'No content'}), 400
-            
-        database = db.get_db()
-        cur = database.cursor()
-        # Verify access (omitted for brevity, but should be there)
-        
-        cur.execute(
-            'INSERT INTO messages (match_id, sender_team_id, content) VALUES (%s, %s, %s)',
-            (match_id, g.user['team_id'], content)
-        )
-        database.commit()
-        return jsonify({'message': 'Sent'}), 201
 
     @app.route('/api/matches/<int:match_id>/strategy', methods=('POST',))
     @login_required
@@ -1149,74 +1000,6 @@ def create_app(test_config=None):
                     print(f"User {user_id} joined match room: {room}")
                 else:
                     print(f"User {user_id} denied access to match room: {match_id}")
-
-    @socketio.on('chat_message')
-    def handle_chat(data):
-        match_id = data.get('match_id')
-        user_id = session.get('user_id')
-        if not match_id or not user_id: return
-
-        room = str(match_id)
-        database = get_db_for_socket()
-        cur = database.cursor()
-        try:
-            # Verify access and get team info
-            cur.execute(
-                'SELECT u.team_id, t.team_number '
-                'FROM users u JOIN teams t ON u.team_id = t.id '
-                'WHERE u.id = %s', (user_id,)
-            )
-            user = cur.fetchone()
-            
-            if not user: return
-            
-            cur.execute(
-                'SELECT id FROM match_alliances WHERE match_id = %s AND team_id = %s',
-                (match_id, user['team_id'])
-            )
-            access = cur.fetchone()
-
-            if not access: return
-
-            # Override/Inject safe data
-            data['team_id'] = user['team_id']
-            data['team_number'] = user['team_number']
-            
-            # Fetch additional info for the broadcast
-            cur.execute(
-                'SELECT u.name as username, t.team_name '
-                'FROM users u JOIN teams t ON u.team_id = t.id '
-                'WHERE u.id = %s', (user_id,)
-            )
-            user_info = cur.fetchone()
-            
-            data['username'] = user_info['username'] if user_info else None
-            data['team_name'] = user_info['team_name'] if user_info else ""
-            
-            msg_type = data.get('message_type', 'text')
-            media_url = data.get('media_url')
-            
-            # Use server-side UTC time for consistency
-            now = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
-            data['timestamp'] = now
-
-            cur.execute(
-                'INSERT INTO messages (match_id, sender_team_id, sender_user_id, content, message_type, media_url, timestamp) '
-                'VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id',
-                (match_id, user['team_id'], user_id, data['content'], msg_type, media_url, now)
-            )
-            data['id'] = cur.fetchone()['id']
-            data['sender_user_id'] = user_id
-            
-            # Fetch creator_team_id for the UI
-            cur.execute('SELECT creator_team_id FROM matches WHERE id = %s', (match_id,))
-            creator = cur.fetchone()
-            data['creator_team_id'] = creator['creator_team_id'] if creator else None
-            
-            database.commit()
-            emit('message', data, room=room)
-        finally:
-            database.close()
 
     @socketio.on('update_drawing')
     def handle_drawing(data):

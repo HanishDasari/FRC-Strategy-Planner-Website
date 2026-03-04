@@ -2,23 +2,6 @@
 let currentNotificationInviteId = null;
 let notificationTimeout = null;
 
-// Global function for deleting messages
-async function deleteMessage(messageId) {
-    if (!confirm('Delete this message?')) return;
-    try {
-        const res = await fetch(`/api/messages/${messageId}`, {
-            method: 'DELETE'
-        });
-        if (!res.ok) {
-            const data = await res.json();
-            alert(data.error || 'Failed to delete message');
-        }
-    } catch (err) {
-        console.error(err);
-        alert('Failed to delete message');
-    }
-}
-
 // Global function for responding to invites
 async function respondToInvite(inviteId, status) {
     try {
@@ -108,11 +91,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    socket.on('message_deleted', (data) => {
-        const msgDiv = document.querySelector(`.message[data-id="${data.id}"]`);
-        if (msgDiv) msgDiv.remove();
-    });
-
     socket.on('match_deleted', (data) => {
         if (Number(data.match_id) === Number(MATCH_ID)) {
             alert("This match has been deleted by another user. You are being redirected to the dashboard.");
@@ -129,7 +107,6 @@ document.addEventListener('DOMContentLoaded', () => {
         isEraser: false,
         drawingData: { 'Autonomous': [], 'Teleop': [], 'Endgame': [] },
         undoData: { 'Autonomous': [], 'Teleop': [], 'Endgame': [] },
-        messages: [],
         strategies: {},
         teams: [],
         invites: [],
@@ -156,55 +133,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const canvas = document.getElementById('field-canvas');
     const ctx = canvas.getContext('2d');
     const strategyText = document.getElementById('strategy-text');
-    const chatDiv = document.getElementById('chat-messages');
     const teamsListDiv = document.getElementById('active-teams-list');
     const invitesListDiv = document.getElementById('match-invites-list');
 
     // --- Socket Listeners ---
 
-    socket.on('message', (msg) => {
-        // Prevent duplicates if already in state (though rare with this setup)
-        if (state.messages.some(m => m.id === msg.id)) return;
-        state.messages.push(msg);
-
-        const div = document.createElement('div');
-        div.className = 'message';
-        div.setAttribute('data-id', msg.id);
-
-        let timestamp = msg.timestamp ? new Date(msg.timestamp) : new Date();
-        const timeStr = isNaN(timestamp.getTime()) ? 'Recently' : timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        const sender = msg.username || msg.team_number;
-
-        let contentHtml = `<div class="message-body">${msg.content || ''}</div>`;
-        if (msg.message_type === 'image') {
-            contentHtml = `<div class="message-body"><img src="${msg.media_url}" style="max-width: 100%; border-radius: 8px; margin-top: 5px;" alt="Image"></div>`;
-        } else if (msg.message_type === 'video') {
-            contentHtml = `<div class="message-body"><video src="${msg.media_url}" controls style="max-width: 100%; border-radius: 8px; margin-top: 5px;"></video></div>`;
-        }
-
-        div.innerHTML = `
-            <div class="message-header">
-                <strong>${sender}</strong>
-                <span class="team-name">(${msg.team_name})</span>
-            </div>
-            ${contentHtml}
-            <div class="message-time">${timeStr}</div>
-        `;
-
-        const isSender = msg.sender_user_id === CURRENT_USER_ID;
-        const isCreator = msg.creator_team_id === CURRENT_TEAM_ID;
-        if (isSender || isCreator) {
-            const delBtn = document.createElement('button');
-            delBtn.className = 'delete-msg-btn';
-            delBtn.innerHTML = '🗑️';
-            delBtn.title = "Delete Message";
-            delBtn.addEventListener('click', () => deleteMessage(msg.id));
-            div.querySelector('.message-header').appendChild(delBtn);
-        }
-
-        chatDiv.appendChild(div);
-        chatDiv.scrollTop = chatDiv.scrollHeight;
-    });
+    // --- Socket Listeners ---
 
     socket.on('drawing_update', (data) => {
         if (data.phase && data.drawing_data) {
@@ -561,44 +495,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } catch (e) { console.error('renderInvites error:', e); }
 
-        // --- Chat Messages ---
-        try {
-            if (data.messages) {
-                // Merge instead of simple overwrite to avoid flickering/loss during race conditions
-                state.messages = data.messages;
-                chatDiv.innerHTML = '';
-                state.messages.forEach(msg => {
-                    const div = document.createElement('div');
-                    div.className = 'message';
-                    div.setAttribute('data-id', msg.id);
-
-                    let timestamp = msg.timestamp ? new Date(msg.timestamp) : new Date();
-                    const timeStr = isNaN(timestamp.getTime()) ? 'Recently' : timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                    const sender = msg.username || msg.team_number;
-
-                    let contentHtml = `<div class="message-body">${msg.content || ''}</div>`;
-                    if (msg.message_type === 'image') {
-                        contentHtml = `<div class="message-body"><img src="${msg.media_url}" style="max-width: 100%; border-radius: 8px;" alt="Image"></div>`;
-                    } else if (msg.message_type === 'video') {
-                        contentHtml = `<div class="message-body"><video src="${msg.media_url}" controls style="max-width: 100%; border-radius: 8px;"></video></div>`;
-                    }
-
-                    const isSender = msg.sender_user_id === CURRENT_USER_ID;
-                    const isCreator = msg.creator_team_id === CURRENT_TEAM_ID;
-                    div.innerHTML = `<div class="message-header"><strong>${sender}</strong> <span>(${msg.team_name})</span></div>${contentHtml}<div class="message-time">${timeStr}</div>`;
-                    if (isSender || isCreator) {
-                        const delBtn = document.createElement('button');
-                        delBtn.className = 'delete-msg-btn';
-                        delBtn.textContent = '🗑️';
-                        delBtn.addEventListener('click', () => deleteMessage(msg.id));
-                        div.querySelector('.message-header').appendChild(delBtn);
-                    }
-                    chatDiv.appendChild(div);
-                });
-                chatDiv.scrollTop = chatDiv.scrollHeight;
-            }
-        } catch (e) { console.error('chat render error:', e); }
-
         // --- Strategy ---
         try {
             if (data.strategies) {
@@ -772,106 +668,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function saveDrawing() {
         socket.emit('update_drawing', { match_id: MATCH_ID, phase: state.phase, drawing_data: JSON.stringify(state.drawingData[state.phase]) });
-    }
-
-    const chatForm = document.getElementById('chat-form');
-    const mediaInput = document.getElementById('media-input');
-    const attachBtn = document.getElementById('attach-btn');
-    const mediaPreviewContainer = document.getElementById('media-preview-container');
-    const mediaPreviewContent = document.getElementById('media-preview-content');
-    const cancelMediaBtn = document.getElementById('cancel-media-btn');
-
-    let stagedFile = null;
-
-    if (attachBtn && mediaInput) {
-        attachBtn.onclick = () => mediaInput.click();
-        mediaInput.onchange = () => {
-            if (!mediaInput.files || !mediaInput.files.length) return;
-            stagedFile = mediaInput.files[0];
-
-            // Show preview
-            mediaPreviewContainer.style.display = 'block';
-            mediaPreviewContent.innerHTML = '';
-
-            if (stagedFile.type.startsWith('image/')) {
-                const img = document.createElement('img');
-                img.src = URL.createObjectURL(stagedFile);
-                img.style.maxWidth = '100px';
-                img.style.maxHeight = '100px';
-                img.style.borderRadius = '4px';
-                mediaPreviewContent.appendChild(img);
-            } else {
-                mediaPreviewContent.innerHTML = `<div style="font-size: 0.7rem; color: var(--text-secondary); background: rgba(255,255,255,0.05); padding: 5px; border-radius: 4px;">${stagedFile.name}</div>`;
-            }
-        };
-    }
-
-    if (cancelMediaBtn) {
-        cancelMediaBtn.onclick = () => {
-            stagedFile = null;
-            mediaInput.value = '';
-            mediaPreviewContainer.style.display = 'none';
-            mediaPreviewContent.innerHTML = '';
-        };
-    }
-
-    if (chatForm) {
-        chatForm.onsubmit = async (e) => {
-            e.preventDefault();
-            const input = e.target.elements['content'];
-            if (!input.value && !stagedFile) return;
-
-            const sendBtn = e.target.querySelector('button[type="submit"]');
-            const originalBtnText = sendBtn.textContent;
-
-            let messagePayload = {
-                match_id: MATCH_ID,
-                content: input.value,
-                message_type: 'text',
-                timestamp: new Date().toISOString()
-            };
-
-            if (stagedFile) {
-                sendBtn.textContent = '...';
-                sendBtn.disabled = true;
-
-                const formData = new FormData();
-                formData.append('file', stagedFile);
-
-                try {
-                    const res = await fetch('/api/upload', {
-                        method: 'POST',
-                        body: formData
-                    });
-
-                    if (!res.ok) throw new Error(`Upload failed with status: ${res.status}`);
-
-                    const data = await res.json();
-                    if (data.url) {
-                        messagePayload.message_type = data.type;
-                        messagePayload.media_url = data.url;
-                    } else {
-                        throw new Error('No URL in response');
-                    }
-                } catch (err) {
-                    console.error("Upload failed:", err);
-                    alert("Failed to upload media. Please try again.");
-                    sendBtn.textContent = originalBtnText;
-                    sendBtn.disabled = false;
-                    return;
-                } finally {
-                    sendBtn.textContent = originalBtnText;
-                    sendBtn.disabled = false;
-                }
-            }
-
-            socket.emit('chat_message', messagePayload);
-            input.value = '';
-            stagedFile = null;
-            mediaInput.value = '';
-            mediaPreviewContainer.style.display = 'none';
-            mediaPreviewContent.innerHTML = '';
-        };
     }
 
     document.querySelectorAll('.phase-tab').forEach(tab => {

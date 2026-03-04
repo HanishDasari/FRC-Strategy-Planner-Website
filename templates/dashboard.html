@@ -88,6 +88,15 @@
         </footer>
     </div>
 
+    <div id="match-data" data-user-id="{{ current_user_id }}" data-team-id="{{ current_team_id }}"
+        data-team-number="{{ current_team_number }}">
+    </div>
+
+    <script>
+        const CURRENT_USER_ID = {{ current_user_id | default (0) }};
+        const CURRENT_TEAM_ID = {{ current_team_id | default (0) }};
+        const CURRENT_TEAM_NUMBER = {{ current_team_number | default (0) }};
+    </script>
     <script src="/static/js/main.js"></script>
     <script>
         // Init dashboard specific logic

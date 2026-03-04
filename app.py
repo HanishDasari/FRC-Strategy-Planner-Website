@@ -112,7 +112,10 @@ def create_app(test_config=None):
     @app.route('/dashboard')
     @login_required
     def dashboard():
-        return render_template('dashboard.html')
+        return render_template('dashboard.html', 
+                               current_user_id=g.user['id'],
+                               current_team_id=g.user['team_id'],
+                               current_team_number=g.user['team_number'])
 
     def send_email(subject, recipient, body):
         msg = Message(subject, recipients=[recipient], sender=current_app.config['MAIL_USERNAME'])
@@ -124,9 +127,29 @@ def create_app(test_config=None):
             print(f"Error sending email: {e}")
             return False
 
-    # Auth API
-    # Auth API
-    # Auth API
+    # Auth Utilities
+    def validate_password(password):
+        """
+        Enforces password requirements:
+        - Minimum 10 characters
+        - At least one uppercase letter
+        - At least one digit
+        - At least one special character
+        """
+        if len(password) < 10 or len(password) > 128:
+            return False, "Password must be between 10 and 128 characters."
+        
+        if not any(c.isupper() for c in password):
+            return False, "Password must contain at least one uppercase letter."
+            
+        if not any(c.isdigit() for c in password):
+            return False, "Password must contain at least one number."
+            
+        import re
+        if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
+            return False, "Password must contain at least one special character."
+            
+        return True, ""
 
     @app.route('/register')
     def register_page():
@@ -144,8 +167,9 @@ def create_app(test_config=None):
             flash("All fields are required.")
             return redirect(url_for('register_page'))
 
-        if len(password) < 10 or len(password) > 128:
-            flash("Password must be between 10 and 128 characters.")
+        is_valid, error_msg = validate_password(password)
+        if not is_valid:
+            flash(error_msg)
             return redirect(url_for('register_page'))
 
         database = db.get_db()
@@ -189,7 +213,7 @@ def create_app(test_config=None):
         # Generate Verification Code
         cur.execute('DELETE FROM email_verifications WHERE user_id = %s', (user_id,))
         code = ''.join(random.choices(string.digits, k=6))
-        expires_at = datetime.now() + timedelta(minutes=15)
+        expires_at = datetime.utcnow() + timedelta(minutes=15)
         cur.execute(
             'INSERT INTO email_verifications (user_id, code, expires_at) VALUES (%s, %s, %s)',
             (user_id, code, expires_at)
@@ -226,7 +250,7 @@ def create_app(test_config=None):
         cur = database.cursor()
         cur.execute(
             'SELECT * FROM email_verifications WHERE user_id = %s AND code = %s AND expires_at > %s',
-            (user_id, code, datetime.now())
+            (user_id, code, datetime.utcnow())
         )
         verification = cur.fetchone()
 
@@ -255,7 +279,7 @@ def create_app(test_config=None):
         
         if user:
             code = ''.join(random.choices(string.digits, k=6))
-            expires_at = datetime.now() + timedelta(minutes=15)
+            expires_at = datetime.utcnow() + timedelta(minutes=15)
             cur.execute('DELETE FROM email_verifications WHERE user_id = %s', (user_id,))
             cur.execute(
                 'INSERT INTO email_verifications (user_id, code, expires_at) VALUES (%s, %s, %s)',
@@ -291,7 +315,7 @@ def create_app(test_config=None):
                 
                 # Generate and send verification code to user
                 code = ''.join(random.choices(string.digits, k=6))
-                expires_at = datetime.now() + timedelta(minutes=15)
+                expires_at = datetime.utcnow() + timedelta(minutes=15)
                 
                 cur.execute('DELETE FROM email_verifications WHERE user_id = %s', (user['id'],))
                 cur.execute(
@@ -301,9 +325,12 @@ def create_app(test_config=None):
                 database.commit()
                 
                 email_body = f"Hello,\n\nYour verification code for login is: {code}\n\nThis code will expire in 15 minutes."
-                send_email("Login Verification Code", user['email'], email_body)
+                if send_email("Login Verification Code", user['email'], email_body):
+                    flash("Please enter the verification code sent to your email.")
+                else:
+                    flash("There was an error sending the verification email. Please try again later.")
+                    print(f"\n--- EMAIL VERIFICATION ERROR (Login) ---\nUser: {user['email']}\nCode: {code}\n---------------------------------------\n")
                 
-                flash("Please enter the verification code sent to your email.")
                 return redirect(url_for('verify_email_page'))
                 
             session.clear()
@@ -327,7 +354,7 @@ def create_app(test_config=None):
 
         if user:
             token = str(uuid.uuid4())
-            expires_at = datetime.now() + timedelta(hours=1)
+            expires_at = datetime.utcnow() + timedelta(hours=1)
             cur.execute(
                 'INSERT INTO password_resets (user_id, token, expires_at) VALUES (%s, %s, %s)',
                 (user['id'], token, expires_at)
@@ -355,15 +382,16 @@ def create_app(test_config=None):
         token = request.form.get('token')
         password = request.form.get('password')
 
-        if len(password) < 10 or len(password) > 128:
-            flash("Password must be between 10 and 128 characters.")
+        is_valid, error_msg = validate_password(password)
+        if not is_valid:
+            flash(error_msg)
             return redirect(url_for('reset_password_page', token=token))
 
         database = db.get_db()
         cur = database.cursor()
         cur.execute(
             'SELECT * FROM password_resets WHERE token = %s AND expires_at > %s',
-            (token, datetime.now())
+            (token, datetime.utcnow())
         )
         reset = cur.fetchone()
 
@@ -379,7 +407,7 @@ def create_app(test_config=None):
             
             # Send new OTP
             code = ''.join(random.choices(string.digits, k=6))
-            expires_at = datetime.now() + timedelta(minutes=15)
+            expires_at = datetime.utcnow() + timedelta(minutes=15)
             cur.execute('INSERT INTO email_verifications (user_id, code, expires_at) VALUES (%s, %s, %s)', (reset['user_id'], code, expires_at))
             database.commit()
             
@@ -472,18 +500,40 @@ def create_app(test_config=None):
 
         # Password update
         if new_password:
-            if len(new_password) < 10 or len(new_password) > 128:
-                flash("Password must be between 10 and 128 characters.")
+            is_valid, error_msg = validate_password(new_password)
+            if not is_valid:
+                flash(error_msg)
                 return redirect(url_for('profile_page'))
+
+            # Record user ID and email before clearing session
+            user_id = g.user['id']
+            user_email = g.user['email']
 
             cur.execute(
                 'UPDATE users SET password_hash = %s, is_verified = 0 WHERE id = %s',
-                (generate_password_hash(new_password), g.user['id'])
+                (generate_password_hash(new_password), user_id)
+            )
+            
+            # Generate and send verification code immediately
+            code = ''.join(random.choices(string.digits, k=6))
+            expires_at = datetime.utcnow() + timedelta(minutes=15)
+            cur.execute('DELETE FROM email_verifications WHERE user_id = %s', (user_id,))
+            cur.execute(
+                'INSERT INTO email_verifications (user_id, code, expires_at) VALUES (%s, %s, %s)',
+                (user_id, code, expires_at)
             )
             database.commit()
+            
+            email_body = f"You updated your password. Your verification code is: {code}\n\nThis code will expire in 15 minutes."
+            if send_email("Password Updated - Verify Email", user_email, email_body):
+                flash("Password updated! A verification code has been sent to your email.")
+            else:
+                flash("Password updated! There was an error sending the verification email, but a code has been generated. Our team is looking into it.")
+                print(f"\n--- EMAIL VERIFICATION ERROR (Profile Update) ---\nUser: {user_email}\nCode: {code}\n----------------------------------------------\n")
+
             session.clear() # Force re-login and verification
-            flash("Password updated! Please verify your email to log back in.")
-            return redirect(url_for('index'))
+            session['pending_verification_user_id'] = user_id
+            return redirect(url_for('verify_email_page'))
 
         database.commit()
         flash("Profile updated successfully!")
@@ -505,15 +555,15 @@ def create_app(test_config=None):
                 return jsonify({'error': 'Match number is required'}), 400
 
             cur.execute(
-                'INSERT INTO matches (match_number, match_type, creator_team_id) VALUES (%s, %s, %s) RETURNING id',
-                (match_number, match_type, g.user['team_id'])
+                'INSERT INTO matches (match_number, match_type, creator_team_id, creator_user_id) VALUES (%s, %s, %s, %s) RETURNING id',
+                (match_number, match_type, g.user['team_id'], g.user['id'])
             )
             match_id = cur.fetchone()['id']
             
             # Creator is always Red for now
             cur.execute(
-                'INSERT INTO match_alliances (match_id, team_id, alliance_color, last_seen, joined_at) VALUES (%s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)',
-                (match_id, g.user['team_id'], 'Red') 
+                'INSERT INTO match_alliances (match_id, team_id, user_id, alliance_color, last_seen, joined_at) VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)',
+                (match_id, g.user['team_id'], g.user['id'], 'Red') 
             )
             
             # Create empty strategy/drawing entries
@@ -537,9 +587,9 @@ def create_app(test_config=None):
             FROM matches m
             JOIN teams t ON m.creator_team_id = t.id
             JOIN match_alliances ma ON m.id = ma.match_id
-            WHERE ma.team_id = %s
+            WHERE ma.user_id = %s
             ORDER BY m.id DESC
-            ''', (g.user['team_id'],)
+            ''', (g.user['id'],)
         )
         matches = cur.fetchall()
         
@@ -610,19 +660,19 @@ def create_app(test_config=None):
         if not to_team:
              return jsonify({'error': 'Team not found'}), 404
              
-        # Check if already invited or in match
+        # Check if already in match (but allow inviting own team for notifications)
         cur.execute(
             'SELECT id FROM match_alliances WHERE match_id = %s AND team_id = %s',
             (match_id, to_team['id'])
         )
         existing = cur.fetchone()
         
-        if existing:
+        if existing and to_team['id'] != g.user['team_id']:
              return jsonify({'error': 'Team already in match'}), 400
 
         cur.execute(
-            'INSERT INTO invites (match_id, from_team_id, to_team_id) VALUES (%s, %s, %s) RETURNING id',
-            (match_id, g.user['team_id'], to_team['id'])
+            'INSERT INTO invites (match_id, from_team_id, to_team_id, from_user_id) VALUES (%s, %s, %s, %s) RETURNING id',
+            (match_id, g.user['team_id'], to_team['id'], g.user['id'])
         )
         invite_id = cur.fetchone()['id']
         database.commit()
@@ -630,11 +680,20 @@ def create_app(test_config=None):
         # Emit real-time invite via Socket.IO
         cur.execute('SELECT match_number FROM matches WHERE id = %s', (match_id,))
         match_info = cur.fetchone()
+        
+        # Get from team name
+        cur.execute('SELECT team_name FROM teams WHERE id = %s', (g.user['team_id'],))
+        from_team_name = cur.fetchone()['team_name']
+
         socketio.emit('new_invite', {
             'id': invite_id,
             'match_id': match_id,
             'match_number': match_info['match_number'],
-            'from_team_number': g.user['team_number']
+            'from_team_number': g.user['team_number'],
+            'from_team_name': from_team_name,
+            'from_user_name': g.user['name'],
+            'from_user_id': g.user['id'],
+            'is_same_team': (to_team['id'] == g.user['team_id'])
         }, room=f"team_{to_team['id']}")
         
         # Also notify everyone in the match room to refresh their invite lists
@@ -659,12 +718,17 @@ def create_app(test_config=None):
         
         cur.execute(
             '''
-            SELECT i.id, i.match_id, m.match_number, t.team_number as from_team
+            SELECT i.id, i.match_id, m.match_number, t.team_number as from_team,
+                   u.name as from_user_name, t.team_name as from_team_name,
+                   i.from_user_id,
+                   (i.from_team_id = i.to_team_id) as is_same_team
             FROM invites i
             JOIN matches m ON i.match_id = m.id
             JOIN teams t ON i.from_team_id = t.id
+            LEFT JOIN users u ON i.from_user_id = u.id
             WHERE i.to_team_id = %s AND i.status = 'Pending'
-            ''', (g.user['team_id'],)
+            AND (i.from_user_id IS NULL OR i.from_user_id != %s)
+            ''', (g.user['team_id'], g.user['id'])
         )
         invites = cur.fetchall()
         return jsonify([dict(row) for row in invites])
@@ -689,16 +753,16 @@ def create_app(test_config=None):
         cur.execute('UPDATE invites SET status = %s WHERE id = %s', (status, invite_id))
         
         if status == 'Accepted':
-            # Add to match alliances, preventing duplicates
+            # Add to match alliances, preventing duplicates for the SPECIFIC user
             cur.execute(
                 '''
-                INSERT INTO match_alliances (match_id, team_id, alliance_color, last_seen, joined_at) 
-                SELECT %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                INSERT INTO match_alliances (match_id, team_id, user_id, alliance_color, last_seen, joined_at) 
+                SELECT %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                 WHERE NOT EXISTS (
-                    SELECT 1 FROM match_alliances WHERE match_id = %s AND team_id = %s
+                    SELECT 1 FROM match_alliances WHERE match_id = %s AND user_id = %s
                 )
                 ''',
-                (invite['match_id'], g.user['team_id'], 'Blue', invite['match_id'], g.user['team_id'])
+                (invite['match_id'], g.user['team_id'], g.user['id'], 'Blue', invite['match_id'], g.user['id'])
             )
         
         database.commit()

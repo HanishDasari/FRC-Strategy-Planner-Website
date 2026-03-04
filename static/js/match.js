@@ -48,6 +48,11 @@ async function respondToInvite(inviteId, status) {
 
 // Show notification popup
 function showNotification(invite) {
+    // Don't show notification to the sender
+    if (typeof CURRENT_USER_ID !== 'undefined' && Number(invite.from_user_id) === Number(CURRENT_USER_ID)) {
+        return;
+    }
+
     const notification = document.getElementById('invite-notification');
     const title = document.getElementById('notification-title');
     const message = document.getElementById('notification-message');
@@ -680,7 +685,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const isReceived = Number(invite.to_team_number) === Number(CURRENT_TEAM_NUMBER);
 
             let actionsHtml = '';
-            if (isReceived) {
+            const isFromMe = typeof CURRENT_USER_ID !== 'undefined' && Number(invite.from_user_id) === Number(CURRENT_USER_ID);
+
+            if (isFromMe) {
+                actionsHtml = `
+                    <div style="display: flex; align-items: center; gap: 5px; color: var(--text-secondary); font-style: italic; font-size: 0.7rem;">
+                        Invite Pending...
+                    </div>
+                `;
+            } else if (isReceived) {
                 actionsHtml = `
                     <div class="invite-actions" style="display: flex; gap: 0.4rem;">
                         <button class="btn btn-accept-invite" style="padding: 0.3rem 0.6rem; font-size: 0.7rem;">Accept</button>
@@ -703,7 +716,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 ${actionsHtml}
             `;
 
-            if (isReceived) {
+            if (isReceived && !isFromMe) {
                 div.querySelector('.btn-accept-invite').addEventListener('click', () => respondToInvite(invite.id, 'Accepted'));
                 div.querySelector('.btn-decline-invite').addEventListener('click', () => respondToInvite(invite.id, 'Declined'));
             }

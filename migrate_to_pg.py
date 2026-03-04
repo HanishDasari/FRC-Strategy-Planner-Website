@@ -9,7 +9,7 @@ load_dotenv()
 SQLITE_DB = 'frc_strategy.sqlite'
 PG_DSN = os.environ.get('DATABASE_URL')
 
-def migrate():
+def migrate_v3():
     if not PG_DSN:
         print("Error: DATABASE_URL not set in .env")
         return
@@ -21,61 +21,96 @@ def migrate():
 
     print(f"Connecting to PostgreSQL...")
     pg_conn = psycopg2.connect(PG_DSN)
-    pg_cur = pg_conn.cursor()
+    pg_cur = pg_conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
-    # Tables in order of dependency
-    tables = [
-        'teams',
-        'users',
-        'email_verifications',
-        'password_resets',
-        'matches',
-        'match_alliances',
-        'invites',
-        'messages',
-        'strategies',
-        'drawings'
-    ]
+    team_id_map = {}
+    user_id_map = {}
+    match_id_map = {}
 
     try:
-        for table in tables:
-            print(f"Migrating table: {table}...")
+        # 1. Migrating TEAMS
+        print("Migrating teams...")
+        sqlite_cur.execute("SELECT * FROM teams")
+        for row in sqlite_cur.fetchall():
+            pg_cur.execute(
+                "INSERT INTO teams (team_number, team_name) VALUES (%s, %s) "
+                "ON CONFLICT (team_number) DO UPDATE SET team_name = EXCLUDED.team_name RETURNING id",
+                (row['team_number'], row['team_name'])
+            )
+            team_id_map[row['id']] = pg_cur.fetchone()['id']
+
+        # 2. Migrating USERS
+        print("Migrating users...")
+        sqlite_cur.execute("SELECT * FROM users")
+        for row in sqlite_cur.fetchall():
+            d = dict(row)
+            old_id = d.pop('id')
+            d['team_id'] = team_id_map.get(d['team_id'], d['team_id'])
             
-            # Fetch from SQLite
-            sqlite_cur.execute(f"SELECT * FROM {table}")
-            rows = sqlite_cur.fetchall()
+            cols = d.keys()
+            query = f"INSERT INTO users ({', '.join(cols)}) VALUES ({', '.join(['%s']*len(cols))}) " \
+                    f"ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name RETURNING id"
+            pg_cur.execute(query, list(d.values()))
+            user_id_map[old_id] = pg_cur.fetchone()['id']
+
+        # 3. Migrating MATCHES
+        print("Migrating matches...")
+        sqlite_cur.execute("SELECT * FROM matches")
+        for row in sqlite_cur.fetchall():
+            d = dict(row)
+            old_id = d.pop('id')
+            d['creator_team_id'] = team_id_map.get(d['creator_team_id'], d['creator_team_id'])
             
-            if not rows:
-                print(f"  No data in {table}, skipping.")
-                continue
+            cols = d.keys()
+            # No unique constraint on matches except ID, so we just insert and get a new ID
+            query = f"INSERT INTO matches ({', '.join(cols)}) VALUES ({', '.join(['%s']*len(cols))}) RETURNING id"
+            pg_cur.execute(query, list(d.values()))
+            match_id_map[old_id] = pg_cur.fetchone()['id']
 
-            # Prepare PG insert
-            columns = rows[0].keys()
-            placeholders = ', '.join(['%s'] * len(columns))
-            cols_str = ', '.join(columns)
-            query = f"INSERT INTO {table} ({cols_str}) VALUES ({placeholders}) ON CONFLICT DO NOTHING"
-
-            # Insert into PG
-            data = [tuple(row) for row in rows]
-            pg_cur.executemany(query, data)
-            print(f"  Successfully migrated {len(rows)} rows to {table}.")
-
-        pg_conn.commit()
-        print("\nMigration completed successfully!")
+        # 4. Migrating OTHER tables
+        tables = [
+            ('email_verifications', ['user_id']),
+            ('password_resets', ['user_id']),
+            ('match_alliances', ['team_id', 'match_id']),
+            ('invites', ['from_team_id', 'to_team_id', 'match_id']),
+            ('messages', ['sender_user_id', 'sender_team_id', 'match_id']),
+            ('strategies', ['match_id']),
+            ('drawings', ['match_id'])
+        ]
         
-        # Reset serial sequences in PG
-        print("Resetting sequences...")
-        for table in tables:
-            pg_cur.execute(f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), coalesce(max(id), 1)) FROM {table};")
+        team_cols = ['team_id', 'creator_team_id', 'from_team_id', 'to_team_id', 'sender_team_id']
+        user_cols = ['user_id', 'sender_user_id']
+        match_cols = ['match_id']
+
+        for table, _ in tables:
+            print(f"Migrating {table}...")
+            sqlite_cur.execute(f"SELECT * FROM {table}")
+            for row in sqlite_cur.fetchall():
+                d = dict(row)
+                if 'id' in d: d.pop('id')
+                
+                # Apply maps
+                for col in d.keys():
+                    if col in team_cols:
+                        d[col] = team_id_map.get(d[col], d[col])
+                    if col in user_cols:
+                        d[col] = user_id_map.get(d[col], d[col])
+                    if col in match_cols:
+                        d[col] = match_id_map.get(d[col], d[col])
+                
+                cols = d.keys()
+                query = f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join(['%s']*len(cols))}) ON CONFLICT DO NOTHING"
+                pg_cur.execute(query, list(d.values()))
+
         pg_conn.commit()
-        print("Sequences reset.")
+        print("Migration V3 successful!")
 
     except Exception as e:
-        print(f"\nError during migration: {e}")
+        print(f"Migration failed: {e}")
         pg_conn.rollback()
     finally:
         sqlite_conn.close()
         pg_conn.close()
 
 if __name__ == "__main__":
-    migrate()
+    migrate_v3()

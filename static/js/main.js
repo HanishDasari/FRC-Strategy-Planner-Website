@@ -105,11 +105,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
             bar.className = 'strength-bar';
 
+            const meterContainer = container.querySelector('.strength-meter-container');
+
             if (val.length === 0) {
+                if (meterContainer) meterContainer.style.display = 'none';
                 bar.style.width = '5%';
                 bar.style.backgroundColor = 'var(--danger)';
                 if (textElement) { textElement.textContent = 'Strength: Weak'; textElement.style.color = 'var(--danger)'; }
-            } else if (strength === 0 || strength === 1) {
+                return; // Stop here if empty
+            } else {
+                if (meterContainer) meterContainer.style.display = 'block';
+            }
+
+            if (strength === 0 || strength === 1) {
                 bar.classList.add('strength-weak');
                 bar.style.width = '';
                 bar.style.backgroundColor = '';
@@ -204,6 +212,11 @@ async function initDashboard() {
 }
 
 function showNotification(invite) {
+    // Don't show notification to the sender
+    if (typeof CURRENT_USER_ID !== 'undefined' && invite.from_user_id === CURRENT_USER_ID) {
+        return;
+    }
+
     const notification = document.getElementById('invite-notification');
     const title = document.getElementById('notification-title');
     const message = document.getElementById('notification-message');
@@ -212,8 +225,14 @@ function showNotification(invite) {
 
     if (!notification) return;
 
-    title.textContent = "New Match Invite!";
-    message.textContent = `Team ${invite.from_team_number} has invited you to Match ${invite.match_number}`;
+    title.textContent = invite.is_same_team ? "Team Notification" : "New Match Invite!";
+
+    if (invite.is_same_team) {
+        const sender = invite.from_user_name || invite.from_team_name || `Team ${invite.from_team_number}`;
+        message.textContent = `${sender} is inviting you to Match ${invite.match_number}`;
+    } else {
+        message.textContent = `Team ${invite.from_team_number} has invited you to Match ${invite.match_number}`;
+    }
 
     const handleResponse = async (status) => {
         try {
@@ -340,14 +359,22 @@ async function loadInvites() {
             div.style.padding = '0.5rem';
             div.style.borderBottom = '1px solid var(--border)';
 
+            const sender = inv.is_same_team
+                ? (inv.from_user_name || inv.from_team_name || `Team ${inv.from_team}`)
+                : `Team ${inv.from_team}`;
+
+            const isFromMe = typeof CURRENT_USER_ID !== 'undefined' && Number(inv.from_user_id) === Number(CURRENT_USER_ID);
+
             div.innerHTML = `
                 <div style="margin-bottom: 0.5rem">
-                    <strong>Team ${inv.from_team}</strong> invites you to Match ${inv.match_number}
+                    <strong>${sender}</strong> invites you to Match ${inv.match_number}
                 </div>
+                ${isFromMe ? '<div style="font-size: 0.75rem; color: var(--text-secondary); font-style: italic;">Invite Pending...</div>' : `
                 <div style="display: flex; gap: 0.5rem;">
                     <button onclick="respondInvite(${inv.id}, 'Accepted')" class="btn" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;">Accept</button>
                     <button onclick="respondInvite(${inv.id}, 'Declined')" class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;">Decline</button>
                 </div>
+                `}
             `;
             list.appendChild(div);
         });

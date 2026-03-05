@@ -181,9 +181,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const fieldCtx = fieldCanvas.getContext('2d');
 
-    // Dynamic dimensions (Horizontal Orientation)
-    let CANVAS_W = 800;
-    let CANVAS_H = 400;
+    // Dynamic dimensions (Vertical Orientation)
+    let CANVAS_W = 400;
+    let CANVAS_H = 800;
     let fieldImageLoaded = false;
     let canvasIsReady = false;
 
@@ -232,12 +232,41 @@ document.addEventListener('DOMContentLoaded', () => {
     const fieldImg = new Image();
     fieldImg.src = '/static/images/FRC_Field_TopView.png';
 
+    function updateCanvasSize() {
+        const isHorizontal = window.innerWidth >= 768;
+        let w, h;
+        if (isHorizontal) {
+            w = fieldImg.naturalWidth || 800;
+            h = fieldImg.naturalHeight || 400;
+        } else {
+            w = fieldImg.naturalHeight || 400;
+            h = fieldImg.naturalWidth || 800;
+        }
+        resizeCanvases(w, h);
+    }
+
+    window.addEventListener('resize', () => {
+        if (fieldImageLoaded) {
+            updateCanvasSize();
+        }
+    });
+
     function drawFieldImage() {
         if (!fieldCtx) return;
         fieldCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
         if (fieldImageLoaded) {
-            // HORIZONTAL VIEW
-            fieldCtx.drawImage(fieldImg, 0, 0, CANVAS_W, CANVAS_H);
+            const isHorizontal = window.innerWidth >= 768;
+            if (isHorizontal) {
+                fieldCtx.drawImage(fieldImg, 0, 0, CANVAS_W, CANVAS_H);
+            } else {
+                // VERTICAL VIEW (rotated 90deg)
+                fieldCtx.save();
+                fieldCtx.translate(0, CANVAS_H);
+                fieldCtx.rotate(-Math.PI / 2);
+                // Swapping W/H in drawImage because of rotation
+                fieldCtx.drawImage(fieldImg, 0, 0, CANVAS_H, CANVAS_W);
+                fieldCtx.restore();
+            }
         } else {
             fieldCtx.fillStyle = '#111';
             fieldCtx.fillRect(0, 0, CANVAS_W, CANVAS_H);
@@ -247,21 +276,21 @@ document.addEventListener('DOMContentLoaded', () => {
     fieldImg.onload = () => {
         console.log("Field image loaded successfully.");
         fieldImageLoaded = true;
-        const w = fieldImg.naturalWidth || 800;
-        const h = fieldImg.naturalHeight || 400;
-        resizeCanvases(w, h);
+        updateCanvasSize();
     };
 
     fieldImg.onerror = () => {
         console.error("FAILED to load field image from:", fieldImg.src);
-        resizeCanvases(800, 400);
+        const isHorizontal = window.innerWidth >= 768;
+        resizeCanvases(isHorizontal ? 800 : 400, isHorizontal ? 400 : 800);
     };
 
     // Immediate fallback initialization
     if (fieldImg.complete && fieldImg.naturalWidth > 0) {
         fieldImg.onload();
     } else {
-        resizeCanvases(800, 400);
+        const isHorizontal = window.innerWidth >= 768;
+        resizeCanvases(isHorizontal ? 800 : 400, isHorizontal ? 400 : 800);
     }
 
     function renderDrawings() {
@@ -269,6 +298,8 @@ document.addEventListener('DOMContentLoaded', () => {
         drawCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
         drawCtx.globalCompositeOperation = 'source-over';
         const currentDrawings = state.drawingData[state.phase] || [];
+        const isHorizontal = window.innerWidth >= 768;
+
         for (const path of currentDrawings) {
             if (!path || !Array.isArray(path.points) || path.points.length < 2) continue;
             drawCtx.beginPath();
@@ -282,9 +313,25 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             drawCtx.lineJoin = 'round';
             drawCtx.lineCap = 'round';
-            drawCtx.moveTo(path.points[0].x, path.points[0].y);
-            for (let i = 1; i < path.points.length; i++) {
-                drawCtx.lineTo(path.points[i].x, path.points[i].y);
+
+            for (let i = 0; i < path.points.length; i++) {
+                let px = path.points[i].x; // Vertical X
+                let py = path.points[i].y; // Vertical Y
+
+                let x, y;
+                if (isHorizontal) {
+                    x = CANVAS_W - py;
+                    y = px;
+                } else {
+                    x = px;
+                    y = py;
+                }
+
+                if (i === 0) {
+                    drawCtx.moveTo(x, y);
+                } else {
+                    drawCtx.lineTo(x, y);
+                }
             }
             drawCtx.stroke();
         }
@@ -312,10 +359,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const scaleX = CANVAS_W / rect.width;
         const scaleY = CANVAS_H / rect.height;
-        return {
-            x: (clientX - rect.left) * scaleX,
-            y: (clientY - rect.top) * scaleY
-        };
+
+        let x = (clientX - rect.left) * scaleX;
+        let y = (clientY - rect.top) * scaleY;
+
+        const isHorizontal = window.innerWidth >= 768;
+        if (isHorizontal) {
+            return {
+                x: y,
+                y: CANVAS_W - x
+            };
+        } else {
+            return { x, y };
+        }
     }
 
     function startDrawing(e) {

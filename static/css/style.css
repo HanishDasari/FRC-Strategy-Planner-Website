@@ -720,24 +720,20 @@ h3 {
     }
 
     .canvas-panel {
-        order: 1;
+        order: 1 !important;
         height: auto !important;
     }
 
-    .panel:nth-child(4) {
-        order: 2;
+    .side-panels-container {
+        display: flex !important;
+        flex-direction: column !important;
+        order: 2 !important;
+        gap: 1.5rem;
+    }
+
+    .side-panels-container>.panel {
         height: 450px !important;
-    }
-
-    .panel:nth-child(1) {
-        order: 3;
-        height: 300px !important;
-    }
-
-    .panel:nth-child(3) {
-        order: 4;
-        height: auto !important;
-        min-height: 200px;
+        min-height: auto;
     }
 
     body {

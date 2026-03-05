@@ -564,14 +564,6 @@ def create_app(test_config=None):
             if not match_number:
                 return jsonify({'error': 'Match number is required'}), 400
 
-            # Check if match already exists for this team/type
-            cur.execute(
-                'SELECT id FROM matches WHERE match_number = %s AND match_type = %s AND creator_team_id = %s',
-                (match_number, match_type, g.user['team_id'])
-            )
-            if cur.fetchone():
-                return jsonify({'error': f'Match {match_number} ({match_type}) already exists for your team.'}), 400
-
             cur.execute(
                 'INSERT INTO matches (match_number, match_type, creator_team_id, creator_user_id) VALUES (%s, %s, %s, %s) RETURNING id',
                 (match_number, match_type, g.user['team_id'], g.user['id'])

@@ -35,8 +35,7 @@ CREATE TABLE IF NOT EXISTS matches (
     match_number INTEGER NOT NULL,
     match_type TEXT NOT NULL, -- 'Qualification', 'Elimination'
     creator_team_id INTEGER NOT NULL REFERENCES teams(id),
-    creator_user_id INTEGER REFERENCES users(id),
-    UNIQUE(creator_team_id, match_number, match_type)
+    creator_user_id INTEGER REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS match_alliances (

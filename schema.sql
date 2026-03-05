@@ -55,6 +55,7 @@ CREATE TABLE match_alliances (
     team_id INTEGER NOT NULL,
     alliance_color TEXT NOT NULL, -- 'Red', 'Blue'
     last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+    joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (match_id) REFERENCES matches (id),
     FOREIGN KEY (team_id) REFERENCES teams (id)
 );

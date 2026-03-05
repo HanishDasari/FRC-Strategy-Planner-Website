@@ -65,8 +65,9 @@ CREATE TABLE invites (
     match_id INTEGER NOT NULL,
     from_team_id INTEGER NOT NULL,
     to_team_id INTEGER NOT NULL,
-    status TEXT NOT NULL DEFAULT 'Pending', -- 'Pending', 'Accepted', 'Declined'
+    status TEXT NOT NULL DEFAULT 'Pending', -- 'Pending', 'Accepted', 'Declined', 'Expired'
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME DEFAULT (datetime('now', '+20 minutes')),
     FOREIGN KEY (match_id) REFERENCES matches (id),
     FOREIGN KEY (from_team_id) REFERENCES teams (id),
     FOREIGN KEY (to_team_id) REFERENCES teams (id)

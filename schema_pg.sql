@@ -54,8 +54,9 @@ CREATE TABLE IF NOT EXISTS invites (
     from_team_id INTEGER NOT NULL REFERENCES teams(id),
     to_team_id INTEGER NOT NULL REFERENCES teams(id),
     from_user_id INTEGER REFERENCES users(id),
-    status TEXT NOT NULL DEFAULT 'Pending', -- 'Pending', 'Accepted', 'Declined'
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    status TEXT NOT NULL DEFAULT 'Pending', -- 'Pending', 'Accepted', 'Declined', 'Expired'
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP DEFAULT (NOW() + INTERVAL '20 minutes')
 );
 
 CREATE TABLE IF NOT EXISTS messages (

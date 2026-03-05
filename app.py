@@ -53,6 +53,29 @@ def create_app(test_config=None):
     db.init_app(app)
     socketio.init_app(app)
     
+    # --- Background cleanup thread: expire old invites every 5 minutes ---
+    def cleanup_expired_invites():
+        import psycopg2
+        import psycopg2.extras
+        import time
+        while True:
+            time.sleep(300)  # 5 minutes
+            try:
+                db_url = app.config.get('DATABASE_URL') or os.environ.get('DATABASE_URL')
+                conn = psycopg2.connect(db_url, cursor_factory=psycopg2.extras.DictCursor)
+                cur = conn.cursor()
+                cur.execute(
+                    "UPDATE invites SET status = 'Expired' WHERE status = 'Pending' AND expires_at IS NOT NULL AND expires_at < NOW()"
+                )
+                conn.commit()
+                conn.close()
+                print("[CLEANUP] Expired invite cleanup ran successfully.")
+            except Exception as e:
+                print(f"[CLEANUP] Error expiring invites: {e}")
+
+    cleanup_thread = threading.Thread(target=cleanup_expired_invites, daemon=True)
+    cleanup_thread.start()
+    
     # --- Database Initialization ---
     with app.app_context():
         try:
@@ -70,8 +93,9 @@ def create_app(test_config=None):
                 cur.execute("ALTER TABLE matches ADD COLUMN IF NOT EXISTS creator_user_id INTEGER REFERENCES users(id)")
                 cur.execute("ALTER TABLE match_alliances ADD COLUMN IF NOT EXISTS creator_user_id INTEGER REFERENCES users(id)")
                 cur.execute("ALTER TABLE match_alliances ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id)")
-                # Invites table migration
+                # Invites table migrations
                 cur.execute("ALTER TABLE invites ADD COLUMN IF NOT EXISTS from_user_id INTEGER REFERENCES users(id)")
+                cur.execute("ALTER TABLE invites ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP DEFAULT (NOW() + INTERVAL '20 minutes')")
                 database.commit()
                 print("Database migrations (matches, match_alliances & invites) applied successfully.")
             except Exception as inner_e:
@@ -680,9 +704,12 @@ def create_app(test_config=None):
         if existing and to_team['id'] != g.user['team_id']:
              return jsonify({'error': 'Team already in match'}), 400
 
+        # Set expiry 20 minutes from now
+        expires_at = datetime.utcnow() + timedelta(minutes=20)
+
         cur.execute(
-            'INSERT INTO invites (match_id, from_team_id, to_team_id, from_user_id) VALUES (%s, %s, %s, %s) RETURNING id',
-            (match_id, g.user['team_id'], to_team['id'], g.user['id'])
+            'INSERT INTO invites (match_id, from_team_id, to_team_id, from_user_id, expires_at) VALUES (%s, %s, %s, %s, %s) RETURNING id',
+            (match_id, g.user['team_id'], to_team['id'], g.user['id'], expires_at)
         )
         invite_id = cur.fetchone()['id']
         database.commit()
@@ -703,6 +730,7 @@ def create_app(test_config=None):
             'from_team_name': from_team_name,
             'from_user_name': g.user['name'],
             'from_user_id': g.user['id'],
+            'expires_at': expires_at.strftime('%Y-%m-%dT%H:%M:%SZ'),
             'is_same_team': (to_team['id'] == g.user['team_id'])
         }, room=f"team_{to_team['id']}")
         
@@ -759,6 +787,10 @@ def create_app(test_config=None):
         
         if not invite or invite['to_team_id'] != g.user['team_id']:
             return jsonify({'error': 'Invite not found or not for you'}), 404
+
+        # Block responses to expired invites
+        if invite['status'] == 'Expired' or (invite.get('expires_at') and datetime.utcnow() > invite['expires_at']):
+            return jsonify({'error': 'This invite has expired and can no longer be accepted or declined.'}), 410
             
         cur.execute('UPDATE invites SET status = %s WHERE id = %s', (status, invite_id))
         
@@ -865,7 +897,7 @@ def create_app(test_config=None):
         )
         teams = cur.fetchall()
 
-        # Invites
+        # Invites — only return non-expired pending invites
         cur.execute(
             '''
             SELECT i.*, t.team_number as from_team_number, t2.team_number as to_team_number
@@ -873,6 +905,7 @@ def create_app(test_config=None):
             JOIN teams t ON i.from_team_id = t.id
             JOIN teams t2 ON i.to_team_id = t2.id
             WHERE i.match_id = %s
+            AND (i.status != 'Pending' OR (i.expires_at IS NULL OR i.expires_at > NOW()))
             ''', (match_id,)
         )
         invites = cur.fetchall()

@@ -186,6 +186,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let CANVAS_H = 800;
     let fieldImageLoaded = false;
     let canvasIsReady = false;
+    let pendingDrawingRender = false; // Flush once canvas is ready
 
     // Create the drawing canvas and overlay it on top of the field canvas
     const drawCanvas = document.createElement('canvas');
@@ -234,6 +235,11 @@ document.addEventListener('DOMContentLoaded', () => {
         restorePhase();
         drawFieldImage();
         renderDrawings();
+        // If fetchData ran before the canvas was ready, flush the pending render now
+        if (pendingDrawingRender) {
+            pendingDrawingRender = false;
+            renderDrawings();
+        }
     }
 
     const fieldImg = new Image();
@@ -639,6 +645,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 renderDrawings();
             }
         } catch (e) { console.error('renderDrawings error:', e); }
+        // Mark pending if canvas isn't ready yet (race condition fix)
+        if (!canvasIsReady) pendingDrawingRender = true;
     }
 
     function renderTeams() {

@@ -508,13 +508,33 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Tool Listeners
     const clearBtn = document.getElementById('clear-drawing-btn');
-    if (clearBtn) {
+    const clearModal = document.getElementById('clear-modal');
+    const confirmClearBtn = document.getElementById('confirm-clear');
+    const cancelClearBtn = document.getElementById('cancel-clear');
+
+    if (clearBtn && clearModal) {
         clearBtn.addEventListener('click', () => {
-            if (!confirm('Clear all drawings for this phase?')) return;
+            clearModal.classList.remove('hidden');
+        });
+
+        cancelClearBtn.addEventListener('click', () => {
+            clearModal.classList.add('hidden');
+        });
+
+        confirmClearBtn.addEventListener('click', () => {
             state.drawingData[state.phase] = [];
-            state.undoData[state.phase] = []; // also clear redo history
+            state.undoData[state.phase] = [];
             renderDrawings();
             saveDrawing();
+            clearModal.classList.add('hidden');
+            console.log("Drawings cleared via custom modal.");
+        });
+
+        // Close modal if clicking outside the content
+        clearModal.addEventListener('click', (e) => {
+            if (e.target === clearModal) {
+                clearModal.classList.add('hidden');
+            }
         });
     }
 

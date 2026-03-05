@@ -137,6 +137,18 @@
 </head>
 
 <body style="overflow-y: auto;">
+    <!-- Clear All Confirmation Modal -->
+    <div id="clear-modal" class="modal hidden">
+        <div class="modal-content">
+            <h3>Clear Drawings?</h3>
+            <p>This will permanently delete all drawings for the current phase. This action cannot be undone.</p>
+            <div class="modal-actions">
+                <button id="cancel-clear" class="btn-secondary">Cancel</button>
+                <button id="confirm-clear" class="btn-danger">Clear All</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Invite Notification Popup -->
     <div id="invite-notification" class="invite-notification">
         <div class="invite-notification-content">

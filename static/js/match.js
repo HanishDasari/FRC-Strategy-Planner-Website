@@ -527,6 +527,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             // Final sync for persistence
+            console.log("Finishing path, sending full sync for", state.phase);
             socket.emit('finish_path', {
                 match_id: MATCH_ID,
                 pathId: state.activePathId,
@@ -699,12 +700,13 @@ document.addEventListener('DOMContentLoaded', () => {
         // --- Drawings: isolated so canvas errors never block above sections ---
         try {
             if (data.drawings) {
-                for (const [phase, json] of Object.entries(data.drawings)) {
-                    if (json) {
+                for (const [phase, rawData] of Object.entries(data.drawings)) {
+                    if (rawData) {
                         try {
-                            let parsed = JSON.parse(json);
+                            let parsed = typeof rawData === 'string' ? JSON.parse(rawData) : rawData;
                             if (Array.isArray(parsed)) {
                                 state.drawingData[phase] = parsed;
+                                console.log(`Loaded ${parsed.length} paths for phase ${phase}`);
                             }
                         } catch (e) {
                             console.error(`Error parsing drawing data for phase ${phase}:`, e);
@@ -714,6 +716,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
                 renderDrawings();
+                console.log("Initial drawing render complete.");
             }
         } catch (e) { console.error('renderDrawings error:', e); }
         // Mark pending if canvas isn't ready yet (race condition fix)
@@ -887,6 +890,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function saveDrawing() {
+        console.log("Saving drawing state (manual/undo/clear)...");
         socket.emit('update_drawing', { match_id: MATCH_ID, phase: state.phase, drawing_data: JSON.stringify(state.drawingData[state.phase]) });
     }
 

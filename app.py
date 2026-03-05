@@ -915,9 +915,17 @@ def create_app(test_config=None):
         for s in strategies:
             strategies_dict[s['phase']] = s['text_content'] or ''
             
-        drawings_dict = {phase: '[]' for phase in ['Autonomous', 'Teleop', 'Endgame']}
+        drawings_dict = {phase: [] for phase in ['Autonomous', 'Teleop', 'Endgame']}
         for d in drawings:
-            drawings_dict[d['phase']] = d['drawing_data_json'] or '[]'
+            # psycopg2 automatically converts jsonb to Python objects
+            val = d['drawing_data_json']
+            if isinstance(val, str):
+                try:
+                    import json
+                    val = json.loads(val)
+                except:
+                    val = []
+            drawings_dict[d['phase']] = val if val is not None else []
 
         def serialize_row(row):
             """Convert a psycopg2 row to a JSON-safe dict."""
@@ -1071,6 +1079,7 @@ def create_app(test_config=None):
                 ''',
                 (match_id, phase, drawing_data)
             )
+            print(f"DEBUG: Successfully persisted drawing for match {match_id}, phase {phase}")
             database.commit()
             emit('drawing_update', data, room=room, include_self=False)
         finally:

@@ -721,7 +721,8 @@ h3 {
 
     .canvas-panel {
         order: 1 !important;
-        height: auto !important;
+        height: 500px !important;
+        /* Fixed height on mobile for vertical map */
         width: 100%;
     }
 

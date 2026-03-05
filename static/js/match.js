@@ -254,34 +254,55 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     function getCoverParams() {
+        const isHorizontal = window.innerWidth >= 768;
         const iw = fieldImg.naturalWidth || 800;
         const ih = fieldImg.naturalHeight || 400;
         const cw = CANVAS_W;
         const ch = CANVAS_H;
 
-        const iRatio = iw / ih;
+        let scale, ox, oy;
+        let effectiveW, effectiveH;
+
+        if (isHorizontal) {
+            effectiveW = iw;
+            effectiveH = ih;
+        } else {
+            // Vertical view: Image is rotated 90deg
+            effectiveW = ih;
+            effectiveH = iw;
+        }
+
+        const iRatio = effectiveW / effectiveH;
         const cRatio = cw / ch;
 
-        let scale, ox, oy;
         if (cRatio > iRatio) {
-            scale = cw / iw;
+            scale = cw / effectiveW;
             ox = 0;
-            oy = (ch - ih * scale) / 2;
+            oy = (ch - effectiveH * scale) / 2;
         } else {
-            scale = ch / ih;
-            ox = (cw - iw * scale) / 2;
+            scale = ch / effectiveH;
+            ox = (cw - effectiveW * scale) / 2;
             oy = 0;
         }
 
-        return { scale, ox, oy, iw, ih };
+        return { scale, ox, oy, iw, ih, isHorizontal };
     }
 
     function drawFieldImage() {
         if (!fieldCtx) return;
         fieldCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
         if (fieldImageLoaded) {
-            const { scale, ox, oy, iw, ih } = getCoverParams();
-            fieldCtx.drawImage(fieldImg, 0, 0, iw, ih, ox, oy, iw * scale, ih * scale);
+            const { scale, ox, oy, iw, ih, isHorizontal } = getCoverParams();
+            if (isHorizontal) {
+                fieldCtx.drawImage(fieldImg, 0, 0, iw, ih, ox, oy, iw * scale, ih * scale);
+            } else {
+                // Vertical: Rotate 90deg Clockwise
+                fieldCtx.save();
+                fieldCtx.translate(ox + (ih * scale), oy);
+                fieldCtx.rotate(Math.PI / 2);
+                fieldCtx.drawImage(fieldImg, 0, 0, iw, ih, 0, 0, iw * scale, ih * scale);
+                fieldCtx.restore();
+            }
         } else {
             fieldCtx.fillStyle = '#111';
             fieldCtx.fillRect(0, 0, CANVAS_W, CANVAS_H);
@@ -312,7 +333,7 @@ document.addEventListener('DOMContentLoaded', () => {
         drawCtx.globalCompositeOperation = 'source-over';
         const currentDrawings = state.drawingData[state.phase] || [];
 
-        const { scale, ox, oy, iw, ih } = getCoverParams();
+        const { scale, ox, oy, iw, ih, isHorizontal } = getCoverParams();
 
         for (const path of currentDrawings) {
             if (!path || !Array.isArray(path.points) || path.points.length < 2) continue;
@@ -330,9 +351,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Render Normalized -> Display conversion
             for (let i = 0; i < path.points.length; i++) {
-                const { x, y } = path.points[i]; // nX, nY
-                const px = x * (iw * scale) + ox;
-                const py = y * (ih * scale) + oy;
+                const { x, y } = path.points[i]; // nX, nY (Horizonatal Normalized)
+                let px, py;
+                if (isHorizontal) {
+                    px = x * (iw * scale) + ox;
+                    py = y * (ih * scale) + oy;
+                } else {
+                    // Vertical: Rotate 90deg Clockwise
+                    // NHS -> Vertical Display
+                    const rx = ih - (y * ih);
+                    const ry = x * iw;
+                    px = rx * scale + ox;
+                    py = ry * scale + oy;
+                }
 
                 if (i === 0) {
                     drawCtx.moveTo(px, py);
@@ -368,11 +399,19 @@ document.addEventListener('DOMContentLoaded', () => {
         const py = (clientY - rect.top) * scaleY;
 
         // Display -> Normalized conversion
-        const { scale, ox, oy, iw, ih } = getCoverParams();
-        return {
-            x: (px - ox) / (iw * scale),
-            y: (py - oy) / (ih * scale)
-        };
+        const { scale, ox, oy, iw, ih, isHorizontal } = getCoverParams();
+        let nx, ny;
+        if (isHorizontal) {
+            nx = (px - ox) / (iw * scale);
+            ny = (py - oy) / (ih * scale);
+        } else {
+            // Vertical: Rotate 90deg Clockwise
+            const rx = (px - ox) / scale;
+            const ry = (py - oy) / scale;
+            nx = ry / iw;
+            ny = (ih - rx) / ih;
+        }
+        return { x: nx, y: ny };
     }
 
     function startDrawing(e) {

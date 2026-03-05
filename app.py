@@ -1058,6 +1058,10 @@ def create_app(test_config=None):
 
             if not access: return
 
+            # New: Support both full state overwrite (legacy/undo) and incremental updates
+            phase = data.get('phase', 'Autonomous')
+            drawing_data = data.get('drawing_data')
+
             cur.execute(
                 '''
                 INSERT INTO drawings (match_id, phase, drawing_data_json) 
@@ -1065,12 +1069,29 @@ def create_app(test_config=None):
                 ON CONFLICT (match_id, phase) 
                 DO UPDATE SET drawing_data_json = EXCLUDED.drawing_data_json, last_updated = CURRENT_TIMESTAMP
                 ''',
-                (match_id, data['phase'], data['drawing_data'])
+                (match_id, phase, drawing_data)
             )
             database.commit()
             emit('drawing_update', data, room=room, include_self=False)
         finally:
             database.close()
+
+    @socketio.on('start_path')
+    def handle_start_path(data):
+        match_id = data.get('match_id')
+        emit('path_started', data, room=str(match_id), include_self=False)
+
+    @socketio.on('add_points')
+    def handle_add_points(data):
+        match_id = data.get('match_id')
+        emit('points_added', data, room=str(match_id), include_self=False)
+
+    @socketio.on('finish_path')
+    def handle_finish_path(data):
+        match_id = data.get('match_id')
+        user_id = session.get('user_id')
+        if not match_id or not user_id: return
+        handle_drawing(data)
 
     @socketio.on('update_strategy')
     def handle_strategy(data):

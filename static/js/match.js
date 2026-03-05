@@ -110,7 +110,74 @@ document.addEventListener('DOMContentLoaded', () => {
         strategies: {},
         teams: [],
         invites: [],
+        remotePaths: {}, // Track active paths from other users: { pathId: { points: [], color, thickness, isEraser } }
+        activePathId: null
     };
+
+    function generatePathId() {
+        return `path_${CURRENT_USER_ID}_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    }
+
+    function renderDrawings() {
+        if (!drawCtx || !canvasIsReady) return;
+        drawCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+        drawCtx.globalCompositeOperation = 'source-over';
+
+        const { scale, ox, oy, iw, ih, isHorizontal } = getCoverParams();
+
+        const currentDrawings = state.drawingData[state.phase] || [];
+
+        // 1. Render all COMPLETED/PERSISTED paths
+        for (const path of currentDrawings) {
+            drawPath(path, scale, ox, oy, iw, ih, isHorizontal);
+        }
+
+        // 2. Render ACTIVE REMOTE paths (from other users currently drawing)
+        for (const pathId in state.remotePaths) {
+            const path = state.remotePaths[pathId];
+            if (path.phase === state.phase) {
+                drawPath(path, scale, ox, oy, iw, ih, isHorizontal);
+            }
+        }
+    }
+
+    function drawPath(path, scale, ox, oy, iw, ih, isHorizontal) {
+        if (!path || !Array.isArray(path.points) || path.points.length < 2) return;
+
+        drawCtx.beginPath();
+        if (path.isEraser) {
+            drawCtx.globalCompositeOperation = 'destination-out';
+            drawCtx.lineWidth = path.thickness || 20;
+        } else {
+            drawCtx.globalCompositeOperation = 'source-over';
+            drawCtx.strokeStyle = path.color || 'red';
+            drawCtx.lineWidth = path.thickness || 3;
+        }
+        drawCtx.lineJoin = 'round';
+        drawCtx.lineCap = 'round';
+
+        for (let i = 0; i < path.points.length; i++) {
+            const { x, y } = path.points[i];
+            let px, py;
+            if (isHorizontal) {
+                px = x * (iw * scale) + ox;
+                py = y * (ih * scale) + oy;
+            } else {
+                const rx = ih - (y * ih);
+                const ry = x * iw;
+                px = rx * scale + ox;
+                py = ry * scale + oy;
+            }
+
+            if (i === 0) {
+                drawCtx.moveTo(px, py);
+            } else {
+                drawCtx.lineTo(px, py);
+            }
+        }
+        drawCtx.stroke();
+        drawCtx.globalCompositeOperation = 'source-over'; // Reset
+    }
 
     function restorePhase() {
         try {
@@ -129,23 +196,36 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) { console.warn("Restore phase error:", e); }
     }
 
-    // DOM Elements
-    const canvas = document.getElementById('field-canvas');
-    const ctx = canvas.getContext('2d');
-    const strategyText = document.getElementById('strategy-text');
-    const teamsListDiv = document.getElementById('active-teams-list');
-    const invitesListDiv = document.getElementById('match-invites-list');
+    // --- Socket Incremental Listeners ---
+    socket.on('path_started', (data) => {
+        state.remotePaths[data.pathId] = {
+            points: [data.startPoint],
+            color: data.color,
+            thickness: data.thickness,
+            isEraser: data.isEraser,
+            phase: data.phase
+        };
+        renderDrawings();
+    });
 
-    // --- Socket Listeners ---
-
-    // --- Socket Listeners ---
+    socket.on('points_added', (data) => {
+        if (state.remotePaths[data.pathId]) {
+            state.remotePaths[data.pathId].points.push(...data.newPoints);
+            renderDrawings();
+        }
+    });
 
     socket.on('drawing_update', (data) => {
+        // Full state refresh (e.g. from Page Load or Undo/Redo or Remote Finish)
         if (data.phase && data.drawing_data) {
             try {
                 let parsed = JSON.parse(data.drawing_data);
                 if (!Array.isArray(parsed)) parsed = [];
                 state.drawingData[data.phase] = parsed;
+                // Cleanup remotePaths that are now in the persisted state
+                if (data.pathId && state.remotePaths[data.pathId]) {
+                    delete state.remotePaths[data.pathId];
+                }
             } catch (e) {
                 state.drawingData[data.phase] = [];
             }
@@ -158,12 +238,12 @@ document.addEventListener('DOMContentLoaded', () => {
     socket.on('strategy_update', (data) => {
         if (data.phase && data.strategy_text !== undefined) {
             state.strategies[data.phase] = data.strategy_text;
-            if (data.phase === state.phase && document.activeElement !== strategyText) {
-                strategyText.value = data.strategy_text;
+            const strategyTxt = document.getElementById('strategy-text');
+            if (data.phase === state.phase && document.activeElement !== strategyTxt) {
+                if (strategyTxt) strategyTxt.value = data.strategy_text;
             }
         }
     });
-
 
     // --- Canvas: Two-Layer Architecture ---
     const fieldCanvas = document.getElementById('field-canvas');
@@ -333,55 +413,6 @@ document.addEventListener('DOMContentLoaded', () => {
         resizeCanvases(800, 400);
     }
 
-    function renderDrawings() {
-        if (!drawCtx || !canvasIsReady) return;
-        drawCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-        drawCtx.globalCompositeOperation = 'source-over';
-        const currentDrawings = state.drawingData[state.phase] || [];
-
-        const { scale, ox, oy, iw, ih, isHorizontal } = getCoverParams();
-
-        for (const path of currentDrawings) {
-            if (!path || !Array.isArray(path.points) || path.points.length < 2) continue;
-            drawCtx.beginPath();
-            if (path.isEraser) {
-                drawCtx.globalCompositeOperation = 'destination-out';
-                drawCtx.lineWidth = path.thickness || 20;
-            } else {
-                drawCtx.globalCompositeOperation = 'source-over';
-                drawCtx.strokeStyle = path.color || 'red';
-                drawCtx.lineWidth = path.thickness || 3;
-            }
-            drawCtx.lineJoin = 'round';
-            drawCtx.lineCap = 'round';
-
-            // Render Normalized -> Display conversion
-            for (let i = 0; i < path.points.length; i++) {
-                const { x, y } = path.points[i]; // nX, nY (Horizonatal Normalized)
-                let px, py;
-                if (isHorizontal) {
-                    px = x * (iw * scale) + ox;
-                    py = y * (ih * scale) + oy;
-                } else {
-                    // Vertical: Rotate 90deg Clockwise
-                    // NHS -> Vertical Display
-                    const rx = ih - (y * ih);
-                    const ry = x * iw;
-                    px = rx * scale + ox;
-                    py = ry * scale + oy;
-                }
-
-                if (i === 0) {
-                    drawCtx.moveTo(px, py);
-                } else {
-                    drawCtx.lineTo(px, py);
-                }
-            }
-            drawCtx.stroke();
-        }
-        drawCtx.globalCompositeOperation = 'source-over';
-    }
-
     function getCoords(e) {
         let rect = drawCanvas.getBoundingClientRect();
 
@@ -422,49 +453,88 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function startDrawing(e) {
         const coords = getCoords(e);
-
-        console.log("Drawing start at:", coords.x, coords.y);
         state.isDrawing = true;
-        state.lastX = coords.x;
-        state.lastY = coords.y;
+        state.activePathId = generatePathId();
 
         const baseThickness = parseInt(document.getElementById('thickness-slider')?.value || 3);
-
-        // Ensure phase exists to prevent push errors
-        if (!state.drawingData[state.phase]) state.drawingData[state.phase] = [];
-        if (!state.undoData[state.phase]) state.undoData[state.phase] = [];
-
-        // Clear redo stack on new drawing
-        state.undoData[state.phase] = [];
-
-        state.drawingData[state.phase].push({
+        const pathData = {
+            pathId: state.activePathId,
             color: state.color,
             isEraser: state.isEraser,
             thickness: state.isEraser ? baseThickness * 3 : baseThickness,
-            points: [{ x: state.lastX, y: state.lastY }]
+            points: [coords],
+            phase: state.phase
+        };
+
+        if (!state.drawingData[state.phase]) state.drawingData[state.phase] = [];
+        state.drawingData[state.phase].push(pathData);
+        state.undoData[state.phase] = [];
+
+        // Broadcast start
+        socket.emit('start_path', {
+            match_id: MATCH_ID,
+            pathId: state.activePathId,
+            startPoint: coords,
+            color: pathData.color,
+            thickness: pathData.thickness,
+            isEraser: pathData.isEraser,
+            phase: state.phase
         });
+
+        renderDrawings();
         if (e.cancelable) e.preventDefault();
     }
+
+    let pointBuffer = [];
+    const BATCH_SIZE = 3; // Send points in small batches to reduce lag
 
     function moveDrawing(e) {
         if (!state.isDrawing) return;
         const coords = getCoords(e);
 
         const currentPhaseDrawings = state.drawingData[state.phase];
-        if (!currentPhaseDrawings || currentPhaseDrawings.length === 0) return;
         const currentPath = currentPhaseDrawings[currentPhaseDrawings.length - 1];
         if (!currentPath) return;
 
-        currentPath.points.push({ x: coords.x, y: coords.y });
+        currentPath.points.push(coords);
+        pointBuffer.push(coords);
+
+        if (pointBuffer.length >= BATCH_SIZE) {
+            socket.emit('add_points', {
+                match_id: MATCH_ID,
+                pathId: state.activePathId,
+                newPoints: [...pointBuffer]
+            });
+            pointBuffer = [];
+        }
+
         renderDrawings();
         if (e.cancelable) e.preventDefault();
     }
 
     function stopDrawing() {
         if (state.isDrawing) {
-            console.log("Drawing stop. Saving...");
             state.isDrawing = false;
-            saveDrawing();
+
+            // Flush remaining points
+            if (pointBuffer.length > 0) {
+                socket.emit('add_points', {
+                    match_id: MATCH_ID,
+                    pathId: state.activePathId,
+                    newPoints: pointBuffer
+                });
+                pointBuffer = [];
+            }
+
+            // Final sync for persistence
+            socket.emit('finish_path', {
+                match_id: MATCH_ID,
+                pathId: state.activePathId,
+                phase: state.phase,
+                drawing_data: JSON.stringify(state.drawingData[state.phase])
+            });
+
+            state.activePathId = null;
         }
     }
 
@@ -614,14 +684,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // --- Strategy ---
         try {
+            const strategyTxt = document.getElementById('strategy-text');
             if (data.strategies) {
                 // Merge strategies
                 for (const [phase, content] of Object.entries(data.strategies)) {
                     state.strategies[phase] = content || '';
                 }
             }
-            if (strategyText && document.activeElement !== strategyText) {
-                strategyText.value = state.strategies[state.phase] || '';
+            if (strategyTxt && document.activeElement !== strategyTxt) {
+                strategyTxt.value = state.strategies[state.phase] || '';
             }
         } catch (e) { console.error('strategy render error:', e); }
 
@@ -650,6 +721,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderTeams() {
+        const teamsListDiv = document.getElementById('active-teams-list');
         if (!teamsListDiv) return;
         teamsListDiv.innerHTML = '';
         state.teams.forEach(team => {
@@ -666,17 +738,18 @@ document.addEventListener('DOMContentLoaded', () => {
             div.style.borderBottom = '1px solid var(--border)';
 
             div.innerHTML = `
-                ${statusDot}
-                <div style="flex-grow: 1;">
-                    <div style="font-weight: 700; color: var(--text-primary); font-size: 0.95rem;">Team ${team.team_number}</div>
-                    <div style="font-size: 0.75rem; color: var(--text-secondary);">${team.team_name}</div>
-                </div>
-            `;
+                    ${statusDot}
+                    <div style="flex-grow: 1;">
+                        <div style="font-weight: 700; color: var(--text-primary); font-size: 0.95rem;">Team ${team.team_number}</div>
+                        <div style="font-size: 0.75rem; color: var(--text-secondary);">${team.team_name}</div>
+                    </div>
+                `;
             teamsListDiv.appendChild(div);
         });
     }
 
     function renderInvites() {
+        const invitesListDiv = document.getElementById('match-invites-list');
         if (!invitesListDiv) return;
         invitesListDiv.innerHTML = '';
 
@@ -720,39 +793,39 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (isFromMe) {
                 actionsHtml = `
-                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 5px;">
-                        <span style="color: var(--text-secondary); font-style: italic; font-size: 0.7rem;">Invite Pending...</span>
-                        ${expiryHtml}
-                    </div>
-                `;
+                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 5px;">
+                            <span style="color: var(--text-secondary); font-style: italic; font-size: 0.7rem;">Invite Pending...</span>
+                            ${expiryHtml}
+                        </div>
+                    `;
             } else if (isReceived) {
                 actionsHtml = `
-                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
-                        <div class="invite-actions" style="display: flex; gap: 0.4rem;">
-                            <button class="btn btn-accept-invite" style="padding: 0.3rem 0.6rem; font-size: 0.7rem;">Accept</button>
-                            <button class="btn btn-secondary btn-decline-invite" style="padding: 0.3rem 0.6rem; font-size: 0.7rem;">Decline</button>
+                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+                            <div class="invite-actions" style="display: flex; gap: 0.4rem;">
+                                <button class="btn btn-accept-invite" style="padding: 0.3rem 0.6rem; font-size: 0.7rem;">Accept</button>
+                                <button class="btn btn-secondary btn-decline-invite" style="padding: 0.3rem 0.6rem; font-size: 0.7rem;">Decline</button>
+                            </div>
+                            ${expiryHtml}
                         </div>
-                        ${expiryHtml}
-                    </div>
-                `;
+                    `;
             } else {
                 actionsHtml = `
-                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 5px;">
-                        <div style="display: flex; align-items: center; gap: 5px; color: var(--accent); font-weight: 600; font-size: 0.7rem;">
-                            <span class="pulse" style="width: 6px; height: 6px; background: var(--accent); border-radius: 50%;"></span>
-                            Pending...
+                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 5px;">
+                            <div style="display: flex; align-items: center; gap: 5px; color: var(--accent); font-weight: 600; font-size: 0.7rem;">
+                                <span class="pulse" style="width: 6px; height: 6px; background: var(--accent); border-radius: 50%;"></span>
+                                Pending...
+                            </div>
+                            ${expiryHtml}
                         </div>
-                        ${expiryHtml}
-                    </div>
-                `;
+                    `;
             }
 
             div.innerHTML = `
-                <div style="margin-bottom: 0.4rem;">
-                    <strong>Team ${invite.from_team_number}</strong> → <strong>Team ${invite.to_team_number}</strong>
-                </div>
-                ${actionsHtml}
-            `;
+                    <div style="margin-bottom: 0.4rem;">
+                        <strong>Team ${invite.from_team_number}</strong> → <strong>Team ${invite.to_team_number}</strong>
+                    </div>
+                    ${actionsHtml}
+                `;
 
             if (isReceived && !isFromMe) {
                 const acceptBtn = div.querySelector('.btn-accept-invite');
@@ -768,43 +841,46 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let strategyTimeout = null;
     function saveStrategy(isManual = false) {
-        if (!strategyText || !saveStrategyBtn) return;
+        const strategyTxt = document.getElementById('strategy-text');
+        const saveStrBtn = document.getElementById('save-strategy-btn');
+        if (!strategyTxt || !saveStrBtn) return;
 
         if (isManual) {
-            saveStrategyBtn.textContent = 'Saving...';
-            saveStrategyBtn.classList.add('btn-loading');
+            saveStrBtn.textContent = 'Saving...';
+            saveStrBtn.classList.add('btn-loading');
         }
 
         socket.emit('update_strategy', {
             match_id: MATCH_ID,
             phase: state.phase,
-            strategy_text: strategyText.value
+            strategy_text: strategyTxt.value
         });
 
         if (isManual) {
             setTimeout(() => {
-                saveStrategyBtn.textContent = 'Saved!';
-                saveStrategyBtn.style.background = '#3fb950';
+                saveStrBtn.textContent = 'Saved!';
+                saveStrBtn.style.background = '#3fb950';
                 setTimeout(() => {
-                    saveStrategyBtn.textContent = 'Save Plan';
-                    saveStrategyBtn.style.background = '';
-                    saveStrategyBtn.classList.remove('btn-loading');
+                    saveStrBtn.textContent = 'Save Plan';
+                    saveStrBtn.style.background = '';
+                    saveStrBtn.classList.remove('btn-loading');
                 }, 2000);
             }, 500);
         }
     }
 
-    if (strategyText) {
-        strategyText.oninput = () => {
+    const strategyTxt = document.getElementById('strategy-text');
+    if (strategyTxt) {
+        strategyTxt.oninput = () => {
             clearTimeout(strategyTimeout);
             strategyTimeout = setTimeout(() => saveStrategy(false), 1000);
         };
-        strategyText.onblur = () => saveStrategy(true);
+        strategyTxt.onblur = () => saveStrategy(true);
     }
 
-    const saveStrategyBtn = document.getElementById('save-strategy-btn');
-    if (saveStrategyBtn) {
-        saveStrategyBtn.onclick = () => {
+    const saveStrBtn = document.getElementById('save-strategy-btn');
+    if (saveStrBtn) {
+        saveStrBtn.onclick = () => {
             clearTimeout(strategyTimeout);
             saveStrategy(true);
         };
@@ -821,7 +897,8 @@ document.addEventListener('DOMContentLoaded', () => {
             state.phase = tab.dataset.phase;
             localStorage.setItem(`frc_phase_${MATCH_ID}`, state.phase);
             console.log("Phase switched to:", state.phase);
-            if (strategyText) strategyText.value = state.strategies[state.phase] || '';
+            const strategyTxt = document.getElementById('strategy-text');
+            if (strategyTxt) strategyTxt.value = state.strategies[state.phase] || '';
             renderDrawings();
         };
     });

@@ -697,6 +697,22 @@ document.addEventListener('DOMContentLoaded', () => {
             div.style.fontSize = '0.8rem';
             div.style.border = '1px solid rgba(255,255,255,0.05)';
 
+            // Expiry Countdown
+            let expiryHtml = '';
+            if (invite.expires_at) {
+                const expiryDate = new Date(invite.expires_at);
+                const now = new Date();
+                const diffMs = expiryDate - now;
+                const diffMins = Math.max(0, Math.floor(diffMs / 60000));
+                const diffSecs = Math.max(0, Math.floor((diffMs % 60000) / 1000));
+
+                if (diffMs <= 0) {
+                    expiryHtml = `<div style="color: #f87171; font-size: 0.7rem; font-weight: 600; margin-top: 0.3rem;">Expired</div>`;
+                } else {
+                    expiryHtml = `<div style="color: #fbbf24; font-size: 0.7rem; margin-top: 0.3rem;">Expires in: ${diffMins}m ${diffSecs}s</div>`;
+                }
+            }
+
             const isReceived = Number(invite.to_team_number) === Number(CURRENT_TEAM_NUMBER);
 
             let actionsHtml = '';
@@ -704,22 +720,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (isFromMe) {
                 actionsHtml = `
-                    <div style="display: flex; align-items: center; gap: 5px; color: var(--text-secondary); font-style: italic; font-size: 0.7rem;">
-                        Invite Pending...
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 5px;">
+                        <span style="color: var(--text-secondary); font-style: italic; font-size: 0.7rem;">Invite Pending...</span>
+                        ${expiryHtml}
                     </div>
                 `;
             } else if (isReceived) {
                 actionsHtml = `
-                    <div class="invite-actions" style="display: flex; gap: 0.4rem;">
-                        <button class="btn btn-accept-invite" style="padding: 0.3rem 0.6rem; font-size: 0.7rem;">Accept</button>
-                        <button class="btn btn-secondary btn-decline-invite" style="padding: 0.3rem 0.6rem; font-size: 0.7rem;">Decline</button>
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+                        <div class="invite-actions" style="display: flex; gap: 0.4rem;">
+                            <button class="btn btn-accept-invite" style="padding: 0.3rem 0.6rem; font-size: 0.7rem;">Accept</button>
+                            <button class="btn btn-secondary btn-decline-invite" style="padding: 0.3rem 0.6rem; font-size: 0.7rem;">Decline</button>
+                        </div>
+                        ${expiryHtml}
                     </div>
                 `;
             } else {
                 actionsHtml = `
-                    <div style="display: flex; align-items: center; gap: 5px; color: var(--accent); font-weight: 600; font-size: 0.7rem;">
-                        <span class="pulse" style="width: 6px; height: 6px; background: var(--accent); border-radius: 50%;"></span>
-                        Pending...
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 5px;">
+                        <div style="display: flex; align-items: center; gap: 5px; color: var(--accent); font-weight: 600; font-size: 0.7rem;">
+                            <span class="pulse" style="width: 6px; height: 6px; background: var(--accent); border-radius: 50%;"></span>
+                            Pending...
+                        </div>
+                        ${expiryHtml}
                     </div>
                 `;
             }
@@ -732,8 +755,10 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
 
             if (isReceived && !isFromMe) {
-                div.querySelector('.btn-accept-invite').addEventListener('click', () => respondToInvite(invite.id, 'Accepted'));
-                div.querySelector('.btn-decline-invite').addEventListener('click', () => respondToInvite(invite.id, 'Declined'));
+                const acceptBtn = div.querySelector('.btn-accept-invite');
+                const declineBtn = div.querySelector('.btn-decline-invite');
+                if (acceptBtn) acceptBtn.addEventListener('click', () => respondToInvite(invite.id, 'Accepted'));
+                if (declineBtn) declineBtn.addEventListener('click', () => respondToInvite(invite.id, 'Declined'));
             }
 
             invitesListDiv.appendChild(div);

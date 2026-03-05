@@ -927,7 +927,7 @@ def create_app(test_config=None):
                     d[k] = v.strftime('%Y-%m-%dT%H:%M:%SZ')
             return d
 
-        print(f"DEBUG: Match {match_id} data - Messages: {len(messages_list)}, Strategies: {len(strategies)}, Drawings: {len(drawings)}, Teams: {len(teams)}, Invites: {len(invites)}")
+        print(f"DEBUG: Match {match_id} data - Strategies: {len(strategies)}, Drawings: {len(drawings)}, Teams: {len(teams)}, Invites: {len(invites)}")
         return jsonify({
             'match_id': match_id,
             'strategies': strategies_dict,

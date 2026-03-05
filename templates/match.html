@@ -98,7 +98,11 @@
                 align-items: center;
                 justify-content: center;
                 min-height: 0 !important;
-                padding: 1rem !important;
+                padding: 0 !important;
+                /* Perfect fit: No padding around canvas */
+                background: #000;
+                overflow: hidden;
+                /* Hide overflow from large canvases */
             }
 
             .side-panels-container {

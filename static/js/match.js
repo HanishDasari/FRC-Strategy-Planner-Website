@@ -203,24 +203,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function resizeCanvases(w, h) {
         console.log("Responsive resize triggered:", w, h);
-        CANVAS_W = w;
-        CANVAS_H = h;
+
+        // Get actual container size for "Cover" fit
+        const container = fieldCanvas.parentElement;
+        const rect = container.getBoundingClientRect();
+
+        CANVAS_W = rect.width || 800;
+        CANVAS_H = rect.height || 400;
 
         fieldCanvas.width = CANVAS_W;
         fieldCanvas.height = CANVAS_H;
         drawCanvas.width = CANVAS_W;
         drawCanvas.height = CANVAS_H;
 
-        // Let the wrapper width be 100% and height be determined by children
+        // Container is already sized by CSS
         canvasWrapper.style.width = '100%';
-        canvasWrapper.style.height = 'auto';
+        canvasWrapper.style.height = '100%';
+        canvasWrapper.style.position = 'absolute';
+        canvasWrapper.style.top = '0';
+        canvasWrapper.style.left = '0';
 
-        // The fieldCanvas is the "anchor" (not absolute)
         fieldCanvas.style.display = 'block';
         fieldCanvas.style.width = '100%';
-        fieldCanvas.style.height = 'auto'; // This keeps the vertical aspect ratio
+        fieldCanvas.style.height = '100%';
+        fieldCanvas.style.objectFit = 'cover'; // Backup for image draw
 
-        // The drawCanvas fits exactly over it
         drawCanvas.style.cssText = `position: absolute; top: 0; left: 0; width: 100%; height: 100%; cursor: crosshair; z-index: 1000; pointer-events: all;`;
 
         canvasIsReady = true;
@@ -233,16 +240,11 @@ document.addEventListener('DOMContentLoaded', () => {
     fieldImg.src = '/static/images/FRC_Field_TopView.png';
 
     function updateCanvasSize() {
-        const isHorizontal = window.innerWidth >= 768;
-        let w, h;
-        if (isHorizontal) {
-            w = fieldImg.naturalWidth || 800;
-            h = fieldImg.naturalHeight || 400;
-        } else {
-            w = fieldImg.naturalHeight || 400;
-            h = fieldImg.naturalWidth || 800;
-        }
-        resizeCanvases(w, h);
+        // ALWAYS use horizontal dimensions
+        const imgW = fieldImg.naturalWidth || 800;
+        const imgH = fieldImg.naturalHeight || 400;
+
+        resizeCanvases(imgW, imgH);
     }
 
     window.addEventListener('resize', () => {
@@ -251,22 +253,35 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    function getCoverParams() {
+        const iw = fieldImg.naturalWidth || 800;
+        const ih = fieldImg.naturalHeight || 400;
+        const cw = CANVAS_W;
+        const ch = CANVAS_H;
+
+        const iRatio = iw / ih;
+        const cRatio = cw / ch;
+
+        let scale, ox, oy;
+        if (cRatio > iRatio) {
+            scale = cw / iw;
+            ox = 0;
+            oy = (ch - ih * scale) / 2;
+        } else {
+            scale = ch / ih;
+            ox = (cw - iw * scale) / 2;
+            oy = 0;
+        }
+
+        return { scale, ox, oy, iw, ih };
+    }
+
     function drawFieldImage() {
         if (!fieldCtx) return;
         fieldCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
         if (fieldImageLoaded) {
-            const isHorizontal = window.innerWidth >= 768;
-            if (isHorizontal) {
-                fieldCtx.drawImage(fieldImg, 0, 0, CANVAS_W, CANVAS_H);
-            } else {
-                // VERTICAL VIEW (rotated 90deg)
-                fieldCtx.save();
-                fieldCtx.translate(0, CANVAS_H);
-                fieldCtx.rotate(-Math.PI / 2);
-                // Swapping W/H in drawImage because of rotation
-                fieldCtx.drawImage(fieldImg, 0, 0, CANVAS_H, CANVAS_W);
-                fieldCtx.restore();
-            }
+            const { scale, ox, oy, iw, ih } = getCoverParams();
+            fieldCtx.drawImage(fieldImg, 0, 0, iw, ih, ox, oy, iw * scale, ih * scale);
         } else {
             fieldCtx.fillStyle = '#111';
             fieldCtx.fillRect(0, 0, CANVAS_W, CANVAS_H);
@@ -281,16 +296,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     fieldImg.onerror = () => {
         console.error("FAILED to load field image from:", fieldImg.src);
-        const isHorizontal = window.innerWidth >= 768;
-        resizeCanvases(isHorizontal ? 800 : 400, isHorizontal ? 400 : 800);
+        resizeCanvases(800, 400);
     };
 
     // Immediate fallback initialization
     if (fieldImg.complete && fieldImg.naturalWidth > 0) {
         fieldImg.onload();
     } else {
-        const isHorizontal = window.innerWidth >= 768;
-        resizeCanvases(isHorizontal ? 800 : 400, isHorizontal ? 400 : 800);
+        resizeCanvases(800, 400);
     }
 
     function renderDrawings() {
@@ -298,7 +311,8 @@ document.addEventListener('DOMContentLoaded', () => {
         drawCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
         drawCtx.globalCompositeOperation = 'source-over';
         const currentDrawings = state.drawingData[state.phase] || [];
-        const isHorizontal = window.innerWidth >= 768;
+
+        const { scale, ox, oy, iw, ih } = getCoverParams();
 
         for (const path of currentDrawings) {
             if (!path || !Array.isArray(path.points) || path.points.length < 2) continue;
@@ -314,23 +328,16 @@ document.addEventListener('DOMContentLoaded', () => {
             drawCtx.lineJoin = 'round';
             drawCtx.lineCap = 'round';
 
+            // Render Normalized -> Display conversion
             for (let i = 0; i < path.points.length; i++) {
-                let px = path.points[i].x; // Vertical X
-                let py = path.points[i].y; // Vertical Y
-
-                let x, y;
-                if (isHorizontal) {
-                    x = CANVAS_W - py;
-                    y = px;
-                } else {
-                    x = px;
-                    y = py;
-                }
+                const { x, y } = path.points[i]; // nX, nY
+                const px = x * (iw * scale) + ox;
+                const py = y * (ih * scale) + oy;
 
                 if (i === 0) {
-                    drawCtx.moveTo(x, y);
+                    drawCtx.moveTo(px, py);
                 } else {
-                    drawCtx.lineTo(x, y);
+                    drawCtx.lineTo(px, py);
                 }
             }
             drawCtx.stroke();
@@ -341,14 +348,11 @@ document.addEventListener('DOMContentLoaded', () => {
     function getCoords(e) {
         let rect = drawCanvas.getBoundingClientRect();
 
-        // Robust fallback: if browser hasn't painted yet, use raw canvas dimensions
+        // Robust fallback
         if (rect.width === 0 || rect.height === 0) {
             console.warn("Canvas rect is 0x0. Using fallback dimensions.");
-            // Force a resize calculation in the background
             resizeCanvases(CANVAS_W, CANVAS_H);
-            // Re-fetch rect after forced layout
             rect = drawCanvas.getBoundingClientRect();
-            // If still zero, mock a rect based on internal width/height to allow drawing anyway
             if (rect.width === 0) {
                 rect = { left: 0, top: 0, width: CANVAS_W, height: CANVAS_H };
             }
@@ -360,18 +364,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const scaleX = CANVAS_W / rect.width;
         const scaleY = CANVAS_H / rect.height;
 
-        let x = (clientX - rect.left) * scaleX;
-        let y = (clientY - rect.top) * scaleY;
+        const px = (clientX - rect.left) * scaleX;
+        const py = (clientY - rect.top) * scaleY;
 
-        const isHorizontal = window.innerWidth >= 768;
-        if (isHorizontal) {
-            return {
-                x: y,
-                y: CANVAS_W - x
-            };
-        } else {
-            return { x, y };
-        }
+        // Display -> Normalized conversion
+        const { scale, ox, oy, iw, ih } = getCoverParams();
+        return {
+            x: (px - ox) / (iw * scale),
+            y: (py - oy) / (ih * scale)
+        };
     }
 
     function startDrawing(e) {

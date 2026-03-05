@@ -715,13 +715,19 @@ h3 {
     }
 
     .panel {
-        height: 500px;
-        min-height: 400px;
+        height: auto !important;
+        min-height: 300px;
     }
 
     .canvas-panel {
         order: 1 !important;
         height: auto !important;
+        width: 100%;
+    }
+
+    .canvas-panel .panel-content {
+        padding: 0 !important;
+        background: #000;
     }
 
     .side-panels-container {
@@ -732,8 +738,8 @@ h3 {
     }
 
     .side-panels-container>.panel {
-        height: 450px !important;
-        min-height: auto;
+        height: auto !important;
+        min-height: 350px;
     }
 
     body {
@@ -741,8 +747,9 @@ h3 {
     }
 
     #field-canvas {
-        max-width: 100%;
-        height: auto;
+        width: 100% !important;
+        height: auto !important;
+        display: block;
     }
 }
 

@@ -188,13 +188,13 @@ def create_app(test_config=None):
     def validate_password(password):
         """
         Enforces password requirements:
-        - Minimum 10 characters
+        - Minimum 8 characters
         - At least one uppercase letter
         - At least one digit
         - At least one special character
         """
-        if len(password) < 10 or len(password) > 128:
-            return False, "Password must be between 10 and 128 characters."
+        if len(password) < 8 or len(password) > 128:
+            return False, "Password must be between 8 and 128 characters."
         
         if not any(c.isupper() for c in password):
             return False, "Password must contain at least one uppercase letter."

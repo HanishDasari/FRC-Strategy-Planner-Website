@@ -76,7 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!bar) return;
 
             let strength = 0;
-            const hasLength = val.length >= 12;
+            const hasLength = val.length >= 8;
             const hasUpper = /[A-Z]/.test(val);
             const hasNumber = /[0-9]/.test(val);
             const hasSpecial = /[^A-Za-z0-9]/.test(val);
@@ -87,8 +87,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (hasSpecial) strength += 1;
 
             if (reqLength) {
-                if (hasLength) { reqLength.textContent = '✓ 12+ characters'; reqLength.classList.add('req-met'); }
-                else { reqLength.textContent = '✗ 12+ characters'; reqLength.classList.remove('req-met'); }
+                if (hasLength) { reqLength.textContent = '✓ 8+ characters'; reqLength.classList.add('req-met'); }
+                else { reqLength.textContent = '✗ 8+ characters'; reqLength.classList.remove('req-met'); }
             }
             if (reqUpper) {
                 if (hasUpper) { reqUpper.textContent = '✓ 1 uppercase letter'; reqUpper.classList.add('req-met'); }

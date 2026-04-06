@@ -239,10 +239,10 @@ def create_app(test_config=None):
         team = cur.fetchone()
         if not team:
             cur.execute(
-                'INSERT INTO teams (team_number, team_name) VALUES (%s, %s) RETURNING id',
+                'INSERT INTO teams (team_number, team_name) VALUES (%s, %s)',
                 (team_number, team_name)
             )
-            team_id = cur.fetchone()['id']
+            team_id = cur.lastrowid
         else:
             team_id = team['id']
 
@@ -260,10 +260,10 @@ def create_app(test_config=None):
         else:
             # Create New User
             cur.execute(
-                'INSERT INTO users (email, name, password_hash, team_id, is_verified) VALUES (%s, %s, %s, %s, %s) RETURNING id',
+                'INSERT INTO users (email, name, password_hash, team_id, is_verified) VALUES (%s, %s, %s, %s, %s)',
                 (email, name, generate_password_hash(password), team_id, 0)
             )
-            user_id = cur.fetchone()['id']
+            user_id = cur.lastrowid
         
         database.commit()
 
@@ -517,10 +517,10 @@ def create_app(test_config=None):
         team = cur.fetchone()
         if not team:
             cur.execute(
-                'INSERT INTO teams (team_number, team_name) VALUES (%s, %s) RETURNING id',
+                'INSERT INTO teams (team_number, team_name) VALUES (%s, %s)',
                 (team_number, team_name)
             )
-            team_id = cur.fetchone()['id']
+            team_id = cur.lastrowid
         else:
             team_id = team['id']
             # Update team name if it already exists (allows fixing typos)
@@ -589,10 +589,10 @@ def create_app(test_config=None):
                 return jsonify({'error': 'Match number is required'}), 400
 
             cur.execute(
-                'INSERT INTO matches (match_number, match_type, creator_team_id, creator_user_id) VALUES (%s, %s, %s, %s) RETURNING id',
+                'INSERT INTO matches (match_number, match_type, creator_team_id, creator_user_id) VALUES (%s, %s, %s, %s)',
                 (match_number, match_type, g.user['team_id'], g.user['id'])
             )
-            match_id = cur.fetchone()['id']
+            match_id = cur.lastrowid
             
             # Creator is always Red for now
             cur.execute(
@@ -708,10 +708,10 @@ def create_app(test_config=None):
         expires_at = datetime.utcnow() + timedelta(minutes=20)
 
         cur.execute(
-            'INSERT INTO invites (match_id, from_team_id, to_team_id, from_user_id, expires_at) VALUES (%s, %s, %s, %s, %s) RETURNING id',
+            'INSERT INTO invites (match_id, from_team_id, to_team_id, from_user_id, expires_at) VALUES (%s, %s, %s, %s, %s)',
             (match_id, g.user['team_id'], to_team['id'], g.user['id'], expires_at)
         )
-        invite_id = cur.fetchone()['id']
+        invite_id = cur.lastrowid
         database.commit()
         
         # Emit real-time invite via Socket.IO
@@ -888,7 +888,7 @@ def create_app(test_config=None):
             '''
             SELECT t.team_number, t.team_name, ma.alliance_color, ma.last_seen,
                    (CASE WHEN ma.last_seen IS NOT NULL 
-                         THEN (EXTRACT(EPOCH FROM (NOW() - ma.last_seen))) < 30 
+                         THEN TIMESTAMPDIFF(SECOND, ma.last_seen, NOW()) < 30 
                          ELSE FALSE END) as is_active
             FROM match_alliances ma
             JOIN teams t ON ma.team_id = t.id
@@ -997,7 +997,7 @@ def create_app(test_config=None):
         cur.execute(
             '''
             SELECT 1 FROM match_alliances 
-            WHERE team_id = %s AND (EXTRACT(EPOCH FROM (NOW() - last_seen)) < 60)
+            WHERE team_id = %s AND TIMESTAMPDIFF(SECOND, last_seen, NOW()) < 60
             LIMIT 1
             ''', (team['id'],)
         )
@@ -1074,8 +1074,7 @@ def create_app(test_config=None):
                 '''
                 INSERT INTO drawings (match_id, phase, drawing_data_json) 
                 VALUES (%s, %s, %s)
-                ON CONFLICT (match_id, phase) 
-                DO UPDATE SET drawing_data_json = EXCLUDED.drawing_data_json, last_updated = CURRENT_TIMESTAMP
+                ON DUPLICATE KEY UPDATE drawing_data_json = VALUES(drawing_data_json), last_updated = CURRENT_TIMESTAMP
                 ''',
                 (match_id, phase, drawing_data)
             )
@@ -1129,8 +1128,7 @@ def create_app(test_config=None):
                 '''
                 INSERT INTO strategies (match_id, phase, text_content) 
                 VALUES (%s, %s, %s)
-                ON CONFLICT (match_id, phase) 
-                DO UPDATE SET text_content = EXCLUDED.text_content
+                ON DUPLICATE KEY UPDATE text_content = VALUES(text_content)
                 ''',
                 (match_id, data['phase'], data['strategy_text'])
             )

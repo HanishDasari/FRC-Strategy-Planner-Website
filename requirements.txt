@@ -5,6 +5,8 @@ flask-socketio
 Flask-Mail
 python-dotenv
 psycopg2-binary
+mysql-connector-python
+PyMySQL
 gunicorn
 eventlet
 resend
